@@ -1,15 +1,12 @@
 const data = {
   asOf: "2025-08-31",
   benchmark: "OMXS30",
-
   portfolios: {
     Default: ["AAPL", "MSFT", "ERIC-B", "VOLV-B", "SPY"],
     "US Tech": ["AAPL", "MSFT"],
     Sweden: ["ERIC-B", "VOLV-B"],
   },
-
   watchlist: ["AAPL", "MSFT", "ERIC-B", "VOLV-B", "SPY"],
-
   stocks: {
     AAPL: {
       symbol: "AAPL",
@@ -83,5 +80,4 @@ const data = {
     },
   },
 };
-
 export default data;
