@@ -1,6 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
 import Link from "next/link";
+import data from "@/data/mock-data.json";
 
 type StockRow = {
   symbol: string;
@@ -39,68 +38,42 @@ function chip(p: number) {
     : "text-gray-600 bg-gray-50";
 }
 
-async function loadData(): Promise<Data> {
-  const filePath = path.join(process.cwd(), "public", "mock-data.json");
-  const raw = await fs.readFile(filePath, "utf-8");
-  return JSON.parse(raw);
-}
-
-export default async function Home() {
-  const data = await loadData();
+export default function Home() {
+  const d = data as Data;
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
       <div className="mx-auto max-w-6xl space-y-6">
         <h1 className="text-3xl font-bold">Stock Dashboard (Mock)</h1>
         <p className="text-gray-600">
-          Benchmark: <span className="font-medium">{data.benchmark}</span> • As
-          of {data.asOf}
+          Benchmark: <span className="font-medium">{d.benchmark}</span> • As of {d.asOf}
         </p>
 
         <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-3 font-semibold text-left text-gray-700">
-                  #
-                </th>
-                <th className="px-3 py-3 font-semibold text-left text-gray-700">
-                  Ticker
-                </th>
+                <th className="px-3 py-3 font-semibold text-left text-gray-700">#</th>
+                <th className="px-3 py-3 font-semibold text-left text-gray-700">Ticker</th>
                 <th className="px-3 py-3 font-semibold text-gray-700">Price</th>
                 <th className="px-3 py-3 font-semibold text-gray-700">Δ Day</th>
-                <th className="px-3 py-3 font-semibold text-gray-700">
-                  {">"} 50D
-                </th>
-                <th className="px-3 py-3 font-semibold text-gray-700">
-                  {">"} 200D
-                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">{">"} 50D</th>
+                <th className="px-3 py-3 font-semibold text-gray-700">{">"} 200D</th>
                 <th className="px-3 py-3 font-semibold text-gray-700">RSI(14)</th>
-                <th className="px-3 py-3 font-semibold text-gray-700">
-                  52w from High
-                </th>
-                <th className="px-3 py-3 font-semibold text-gray-700">
-                  6m vs {data.benchmark}
-                </th>
-                <th className="px-3 py-3 font-semibold text-gray-700">
-                  12m vs {data.benchmark}
-                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">52w from High</th>
+                <th className="px-3 py-3 font-semibold text-gray-700">6m vs {d.benchmark}</th>
+                <th className="px-3 py-3 font-semibold text-gray-700">12m vs {d.benchmark}</th>
               </tr>
             </thead>
             <tbody>
-              {data.watchlist.map((sym, i) => {
-                const r = data.stocks[sym];
+              {d.watchlist.map((sym, i) => {
+                const r = d.stocks[sym];
                 const above50 = r.last > r.sma50;
                 const above200 = r.last > r.sma200;
 
                 return (
-                  <tr
-                    key={sym}
-                    className={i % 2 ? "bg-gray-50" : ""}
-                  >
+                  <tr key={sym} className={i % 2 ? "bg-gray-50" : ""}>
                     <td className="px-3 py-3 text-gray-500">{i + 1}</td>
-
-                    {/* ✅ Ticker cell with link */}
                     <td className="px-3 py-3 font-medium">
                       <Link
                         href={`/stock/${encodeURIComponent(r.symbol)}`}
@@ -109,35 +82,14 @@ export default async function Home() {
                         {r.symbol}
                       </Link>
                     </td>
-
                     <td className="px-3 py-3">{r.last.toFixed(2)}</td>
-                    <td
-                      className={`px-3 py-3 font-medium ${chip(r.changePct)}`}
-                    >
-                      {fmtPct(r.changePct)}
-                    </td>
-                    <td>
-                      <span
-                        className={`px-2 py-1 rounded ${pill(above50)}`}
-                      >
-                        {above50 ? "Yes" : "No"}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        className={`px-2 py-1 rounded ${pill(above200)}`}
-                      >
-                        {above200 ? "Yes" : "No"}
-                      </span>
-                    </td>
+                    <td className={`px-3 py-3 font-medium ${chip(r.changePct)}`}>{fmtPct(r.changePct)}</td>
+                    <td><span className={`px-2 py-1 rounded ${pill(above50)}`}>{above50 ? "Yes" : "No"}</span></td>
+                    <td><span className={`px-2 py-1 rounded ${pill(above200)}`}>{above200 ? "Yes" : "No"}</span></td>
                     <td className="px-3 py-3">{r.rsi14.toFixed(1)}</td>
                     <td className="px-3 py-3">{fmtPct(r.dist52wHighPct)}</td>
-                    <td className={`px-3 py-3 ${chip(r.m6VsBenchmarkPct)}`}>
-                      {fmtPct(r.m6VsBenchmarkPct)}
-                    </td>
-                    <td className={`px-3 py-3 ${chip(r.m12VsBenchmarkPct)}`}>
-                      {fmtPct(r.m12VsBenchmarkPct)}
-                    </td>
+                    <td className={`px-3 py-3 ${chip(r.m6VsBenchmarkPct)}`}>{fmtPct(r.m6VsBenchmarkPct)}</td>
+                    <td className={`px-3 py-3 ${chip(r.m12VsBenchmarkPct)}`}>{fmtPct(r.m12VsBenchmarkPct)}</td>
                   </tr>
                 );
               })}
@@ -145,9 +97,7 @@ export default async function Home() {
           </table>
         </div>
 
-        <p className="text-xs text-gray-500">
-          Edit <code>/public/mock-data.json</code> to change your list.
-        </p>
+        <p className="text-xs text-gray-500">Edit <code>/src/data/mock-data.json</code> to change your list.</p>
       </div>
     </main>
   );
