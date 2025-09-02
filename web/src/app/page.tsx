@@ -1,103 +1,154 @@
-import Image from "next/image";
+import fs from "fs/promises";
+import path from "path";
+import Link from "next/link";
 
-export default function Home() {
+type StockRow = {
+  symbol: string;
+  name: string;
+  last: number;
+  changePct: number;
+  rsi14: number;
+  sma50: number;
+  sma200: number;
+  dist52wHighPct: number;
+  m6VsBenchmarkPct: number;
+  m12VsBenchmarkPct: number;
+  newsSent: number;
+  redditSent: number;
+};
+
+type Data = {
+  asOf: string;
+  benchmark: string;
+  watchlist: string[];
+  stocks: Record<string, StockRow>;
+};
+
+function fmtPct(x: number, d = 1) {
+  const sign = x > 0 ? "+" : "";
+  return `${sign}${x.toFixed(d)}%`;
+}
+function pill(ok: boolean) {
+  return ok ? "text-green-700 bg-green-50" : "text-red-700 bg-red-50";
+}
+function chip(p: number) {
+  return p > 0.1
+    ? "text-green-600 bg-green-50"
+    : p < -0.1
+    ? "text-red-600 bg-red-50"
+    : "text-gray-600 bg-gray-50";
+}
+
+async function loadData(): Promise<Data> {
+  const filePath = path.join(process.cwd(), "public", "mock-data.json");
+  const raw = await fs.readFile(filePath, "utf-8");
+  return JSON.parse(raw);
+}
+
+export default async function Home() {
+  const data = await loadData();
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="min-h-screen px-6 py-10 bg-gray-50">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <h1 className="text-3xl font-bold">Stock Dashboard (Mock)</h1>
+        <p className="text-gray-600">
+          Benchmark: <span className="font-medium">{data.benchmark}</span> • As
+          of {data.asOf}
+        </p>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+        <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-3 font-semibold text-left text-gray-700">
+                  #
+                </th>
+                <th className="px-3 py-3 font-semibold text-left text-gray-700">
+                  Ticker
+                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">Price</th>
+                <th className="px-3 py-3 font-semibold text-gray-700">Δ Day</th>
+                <th className="px-3 py-3 font-semibold text-gray-700">
+                  {">"} 50D
+                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">
+                  {">"} 200D
+                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">RSI(14)</th>
+                <th className="px-3 py-3 font-semibold text-gray-700">
+                  52w from High
+                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">
+                  6m vs {data.benchmark}
+                </th>
+                <th className="px-3 py-3 font-semibold text-gray-700">
+                  12m vs {data.benchmark}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.watchlist.map((sym, i) => {
+                const r = data.stocks[sym];
+                const above50 = r.last > r.sma50;
+                const above200 = r.last > r.sma200;
+
+                return (
+                  <tr
+                    key={sym}
+                    className={i % 2 ? "bg-gray-50" : ""}
+                  >
+                    <td className="px-3 py-3 text-gray-500">{i + 1}</td>
+
+                    {/* ✅ Ticker cell with link */}
+                    <td className="px-3 py-3 font-medium">
+                      <Link
+                        href={`/stock/${encodeURIComponent(r.symbol)}`}
+                        className="underline hover:no-underline"
+                      >
+                        {r.symbol}
+                      </Link>
+                    </td>
+
+                    <td className="px-3 py-3">{r.last.toFixed(2)}</td>
+                    <td
+                      className={`px-3 py-3 font-medium ${chip(r.changePct)}`}
+                    >
+                      {fmtPct(r.changePct)}
+                    </td>
+                    <td>
+                      <span
+                        className={`px-2 py-1 rounded ${pill(above50)}`}
+                      >
+                        {above50 ? "Yes" : "No"}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={`px-2 py-1 rounded ${pill(above200)}`}
+                      >
+                        {above200 ? "Yes" : "No"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">{r.rsi14.toFixed(1)}</td>
+                    <td className="px-3 py-3">{fmtPct(r.dist52wHighPct)}</td>
+                    <td className={`px-3 py-3 ${chip(r.m6VsBenchmarkPct)}`}>
+                      {fmtPct(r.m6VsBenchmarkPct)}
+                    </td>
+                    <td className={`px-3 py-3 ${chip(r.m12VsBenchmarkPct)}`}>
+                      {fmtPct(r.m12VsBenchmarkPct)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+
+        <p className="text-xs text-gray-500">
+          Edit <code>/public/mock-data.json</code> to change your list.
+        </p>
+      </div>
+    </main>
   );
 }
