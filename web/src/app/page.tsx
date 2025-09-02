@@ -1,4 +1,4 @@
-import data from "@/data/mock-data";
+import data from "../data/mock-data";
 import DashboardClient from "@/components/DashboardClient";
 
 export default function Home() {
