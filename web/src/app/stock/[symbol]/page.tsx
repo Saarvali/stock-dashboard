@@ -1,5 +1,5 @@
 import Link from "next/link";
-import raw from "@/data/mock-data.json";
+import raw from "@/data/mock-data";
 import { notFound } from "next/navigation";
 
 type StockRow = {

@@ -1,4 +1,4 @@
-import data from "@/data/mock-data.json";
+import data from "@/data/mock-data";
 import DashboardClient from "@/components/DashboardClient";
 
 export default function Home() {
@@ -7,10 +7,10 @@ export default function Home() {
       <div className="mx-auto max-w-6xl space-y-4">
         <h1 className="text-3xl font-bold">Stock Dashboard (Mock)</h1>
         <p className="text-gray-600">
-          Benchmark: <span className="font-medium">{(data as any).benchmark}</span> • As of{" "}
-          {(data as any).asOf}
+          Benchmark: <span className="font-medium">{data.benchmark}</span> • As of{" "}
+          {data.asOf}
         </p>
-        <DashboardClient data={data as any} />
+        <DashboardClient data={data} />
       </div>
     </main>
   );
