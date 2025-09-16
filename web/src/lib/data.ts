@@ -3,7 +3,9 @@ import { getDailySeries, getQuote, searchSymbols, type SeriesPoint } from "@/lib
 import { finnhubDaily, finnhubDailyFromCandidates, type FinnhubPoint } from "@/lib/finnhub";
 import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
 
-const BENCH = "SPY";
+const BENCH = "SPY";                // Benchmark + S&P500 overlay fallback
+const DETAIL_DAYS = 2100;           // ~8 years for 5Y/MAX charts on the detail page
+const DASHBOARD_SIZE: "compact" | "full" = "compact";
 
 /* ==== Types ==== */
 export type StockRow = {
@@ -100,14 +102,15 @@ function buildRowFromCloses(symbol: string, name: string, closes: number[], benc
   };
 }
 
-async function fullSeries1Y(
-  symbol: string
+async function fullSeriesWindow(
+  symbol: string,
+  days: number
 ): Promise<{ series: Array<FinnhubPoint | (SeriesPoint & { volume?: number | null })>; source: "FINNHUB" | "ALPHAVANTAGE" }> {
   try {
-    const s = await finnhubDaily(symbol, 420);
+    const s = await finnhubDaily(symbol, days);
     return { series: s, source: "FINNHUB" };
   } catch {
-    // fallback to Alpha
+    // fallback to Alpha Vantage (no volume)
   }
   const s = await getDailySeries(symbol, "full");
   const withVol: Array<SeriesPoint & { volume: number | null }> = s.map((r) => ({
@@ -166,7 +169,7 @@ function mergeOverlays(
   return { data, overlaysIncluded, note: "Indexed to 100 at period start" };
 }
 
-/* ==== Dashboard (compact) ==== */
+/* ==== Dashboard (compact, fast) ==== */
 export async function getDashboardData(): Promise<Data> {
   const watchlist = mockData.watchlist;
   const nameMap = new Map<string, string>();
@@ -175,7 +178,7 @@ export async function getDashboardData(): Promise<Data> {
   let benchSeries: number[] = [];
   let apiAsOf = "";
   try {
-    const benchDaily = await getDailySeries(BENCH, "compact");
+    const benchDaily = await getDailySeries(BENCH, DASHBOARD_SIZE);
     benchSeries = benchDaily.map((r) => r.close);
     apiAsOf = benchDaily.at(-1)?.date ?? "";
   } catch {
@@ -187,7 +190,7 @@ export async function getDashboardData(): Promise<Data> {
     watchlist.map(async (sym) => {
       const name = nameMap.get(sym) || sym;
       try {
-        const s = await getDailySeries(sym, "compact");
+        const s = await getDailySeries(sym, DASHBOARD_SIZE);
         const closes = s.map((r) => r.close);
         return buildRowFromCloses(sym, name, closes, benchSeries);
       } catch {
@@ -212,10 +215,7 @@ export async function getDashboardData(): Promise<Data> {
         } catch {
           const m = mockData.stocks[sym];
           if (!m) return undefined;
-          const copy: StockRow = {
-            ...m,
-            live: false,
-          };
+          const copy: StockRow = { ...m, live: false };
           return copy;
         }
       }
@@ -241,7 +241,80 @@ export async function getDashboardData(): Promise<Data> {
   };
 }
 
-/* ==== Single symbol (1Y, overlays) ==== */
+/* ==== Dashboard for a custom watchlist (compact) ==== */
+export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
+  const wl = (watchlist || [])
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (!wl.length) return getDashboardData();
+
+  // Benchmark (compact for speed on dashboard)
+  let benchSeries: number[] = [];
+  let apiAsOf = "";
+  try {
+    const benchDaily = await getDailySeries(BENCH, DASHBOARD_SIZE);
+    benchSeries = benchDaily.map((r) => r.close);
+    apiAsOf = benchDaily.at(-1)?.date ?? "";
+  } catch {
+    benchSeries = [1, 1];
+  }
+  const asOf = apiAsOf || new Date().toISOString().slice(0, 10);
+
+  // Build rows for the provided watchlist
+  const entries = await Promise.all(
+    wl.map(async (sym) => {
+      try {
+        const s = await getDailySeries(sym, DASHBOARD_SIZE);
+        const closes = s.map((r) => r.close);
+        return buildRowFromCloses(sym, sym, closes, benchSeries);
+      } catch {
+        // Fallback to quote-only; if that fails, skip the symbol
+        try {
+          const q = await getQuote(sym);
+          const fallback: StockRow = {
+            symbol: sym.toUpperCase(),
+            name: sym.toUpperCase(),
+            last: q.last,
+            changePct: q.changePct,
+            rsi14: NaN,
+            sma50: NaN,
+            sma200: NaN,
+            dist52wHighPct: NaN,
+            m6VsBenchmarkPct: 0,
+            m12VsBenchmarkPct: 0,
+            newsSent: 0,
+            redditSent: 0,
+            live: false,
+          };
+          return fallback;
+        } catch {
+          return undefined;
+        }
+      }
+    })
+  );
+
+  const stocks: Record<string, StockRow> = {};
+  let liveCount = 0;
+  for (const r of entries) {
+    if (!r) continue;
+    stocks[r.symbol] = r;
+    if (r.live) liveCount++;
+  }
+
+  return {
+    asOf,
+    benchmark: BENCH,
+    watchlist: wl,
+    portfolios: undefined,
+    stocks,
+    liveCount,
+    totalCount: wl.length,
+  };
+}
+
+/* ==== Single symbol (deep history, overlays) ==== */
 export async function getAnyStockDetail(
   input: string
 ): Promise<{ data: Data; row?: StockRow; chart?: ChartPayload }> {
@@ -259,19 +332,19 @@ export async function getAnyStockDetail(
     return { data: empty, row: undefined, chart: undefined };
   }
 
-  // Benchmark (1Y) & asOf
+  // Benchmark (deep) & asOf
   let benchCloses: number[] = [];
   let asOf = new Date().toISOString().slice(0, 10);
   let spySeries: Array<{ date: string; close: number }> | null = null;
   try {
-    const spy = await finnhubDailyFromCandidates(["SPY", "^GSPC"], 420);
+    const spy = await finnhubDailyFromCandidates(["SPY", "^GSPC"], DETAIL_DAYS);
     spySeries = spy.series.map((r) => ({ date: r.date, close: r.close }));
     benchCloses = spy.series.map((r) => r.close);
     asOf = spy.series.at(-1)?.date ?? asOf;
   } catch {
     try {
       const avSpy = await getDailySeries(BENCH, "full");
-      benchCloses = avSpy.map((r) => r.close).slice(-300);
+      benchCloses = avSpy.map((r) => r.close);
       asOf = avSpy.at(-1)?.date ?? asOf;
       spySeries = avSpy.map((r) => ({ date: r.date, close: r.close }));
     } catch {
@@ -279,11 +352,11 @@ export async function getAnyStockDetail(
     }
   }
 
-  // Main series (try raw, then search)
+  // Main series (try raw, then resolve via search)
   let chosen = raw.toUpperCase();
   let mainSeries: Array<{ date: string; close: number; volume?: number | null }> | null = null;
   try {
-    const r = await fullSeries1Y(chosen);
+    const r = await fullSeriesWindow(chosen, DETAIL_DAYS);
     mainSeries = r.series;
   } catch {
     try {
@@ -291,7 +364,7 @@ export async function getAnyStockDetail(
       const best = matches?.[0]?.symbol?.toUpperCase();
       if (best) {
         chosen = best;
-        const r2 = await fullSeries1Y(chosen);
+        const r2 = await fullSeriesWindow(chosen, DETAIL_DAYS);
         mainSeries = r2.series;
       }
     } catch {
@@ -299,10 +372,10 @@ export async function getAnyStockDetail(
     }
   }
 
-  // OMXS30 overlay (best effort)
+  // OMXS30 overlay (deep)
   let omxSeries: Array<{ date: string; close: number }> | null = null;
   try {
-    const omx = await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], 420);
+    const omx = await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], DETAIL_DAYS);
     omxSeries = omx.series.map((r) => ({ date: r.date, close: r.close }));
   } catch {
     omxSeries = null;
