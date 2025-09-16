@@ -2,6 +2,8 @@ import mock from "@/data/mock-data";
 import { getDailySeries, getQuote, searchSymbols, type SeriesPoint } from "@/lib/alpha";
 import { finnhubDaily, finnhubDailyFromCandidates, type FinnhubPoint } from "@/lib/finnhub";
 import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
+import { getNewsSentiment } from "@/lib/news";
+import { getRedditSentiment } from "@/lib/reddit";
 
 const BENCH = "SPY";                // Benchmark + S&P500 overlay fallback
 const DETAIL_DAYS = 2100;           // ~8 years for 5Y/MAX charts on the detail page
@@ -19,8 +21,8 @@ export type StockRow = {
   dist52wHighPct: number;
   m6VsBenchmarkPct: number;
   m12VsBenchmarkPct: number;
-  newsSent: number;
-  redditSent: number;
+  newsSent: number;    // -1..+1
+  redditSent: number;  // -1..+1
   live: boolean;
 };
 
@@ -169,6 +171,20 @@ function mergeOverlays(
   return { data, overlaysIncluded, note: "Indexed to 100 at period start" };
 }
 
+async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
+  try {
+    const [news, reddit] = await Promise.all([
+      getNewsSentiment(symbol),
+      getRedditSentiment(symbol),
+    ]);
+    row.newsSent = Number.isFinite(news) ? news : 0;
+    row.redditSent = Number.isFinite(reddit) ? reddit : 0;
+  } catch {
+    // keep defaults (0)
+  }
+  return row;
+}
+
 /* ==== Dashboard (compact, fast) ==== */
 export async function getDashboardData(): Promise<Data> {
   const watchlist = mockData.watchlist;
@@ -189,14 +205,15 @@ export async function getDashboardData(): Promise<Data> {
   const entries = await Promise.all(
     watchlist.map(async (sym) => {
       const name = nameMap.get(sym) || sym;
+      let row: StockRow | undefined;
       try {
         const s = await getDailySeries(sym, DASHBOARD_SIZE);
         const closes = s.map((r) => r.close);
-        return buildRowFromCloses(sym, name, closes, benchSeries);
+        row = buildRowFromCloses(sym, name, closes, benchSeries);
       } catch {
         try {
           const q = await getQuote(sym);
-          const fallback: StockRow = {
+          row = {
             symbol: sym.toUpperCase(),
             name,
             last: q.last,
@@ -211,14 +228,13 @@ export async function getDashboardData(): Promise<Data> {
             redditSent: 0,
             live: false,
           };
-          return fallback;
         } catch {
           const m = mockData.stocks[sym];
-          if (!m) return undefined;
-          const copy: StockRow = { ...m, live: false };
-          return copy;
+          if (m) row = { ...m, live: false };
         }
       }
+      if (!row) return undefined;
+      return fillSentiments(sym, row);
     })
   );
 
@@ -249,7 +265,6 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
 
   if (!wl.length) return getDashboardData();
 
-  // Benchmark (compact for speed on dashboard)
   let benchSeries: number[] = [];
   let apiAsOf = "";
   try {
@@ -261,18 +276,17 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
   }
   const asOf = apiAsOf || new Date().toISOString().slice(0, 10);
 
-  // Build rows for the provided watchlist
   const entries = await Promise.all(
     wl.map(async (sym) => {
+      let row: StockRow | undefined;
       try {
         const s = await getDailySeries(sym, DASHBOARD_SIZE);
         const closes = s.map((r) => r.close);
-        return buildRowFromCloses(sym, sym, closes, benchSeries);
+        row = buildRowFromCloses(sym, sym, closes, benchSeries);
       } catch {
-        // Fallback to quote-only; if that fails, skip the symbol
         try {
           const q = await getQuote(sym);
-          const fallback: StockRow = {
+          row = {
             symbol: sym.toUpperCase(),
             name: sym.toUpperCase(),
             last: q.last,
@@ -287,11 +301,12 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
             redditSent: 0,
             live: false,
           };
-          return fallback;
         } catch {
-          return undefined;
+          row = undefined;
         }
       }
+      if (!row) return undefined;
+      return fillSentiments(sym, row);
     })
   );
 
@@ -414,6 +429,11 @@ export async function getAnyStockDetail(
   let chart: ChartPayload | undefined;
   if (mainSeries && mainSeries.length) {
     chart = mergeOverlays(mainSeries, spySeries, omxSeries);
+  }
+
+  // Fill sentiments for detail row
+  if (row) {
+    row = await fillSentiments(chosen, row);
   }
 
   const data: Data = {
