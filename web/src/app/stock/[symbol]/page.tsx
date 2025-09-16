@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { getAnyStockDetail } from "@/lib/data";
 import PriceChart from "@/components/PriceChart";
 
@@ -20,6 +19,7 @@ export default async function StockPage({ params }: { params: Promise<{ symbol: 
   const { symbol } = await params;
   const key = decodeURIComponent(symbol);
   const { data, row: stock, chart } = await getAnyStockDetail(key);
+
   if (!stock) {
     return (
       <main className="min-h-screen px-6 py-10 bg-gray-50">
@@ -30,7 +30,7 @@ export default async function StockPage({ params }: { params: Promise<{ symbol: 
             free data provider limits can temporarily block requests.
           </p>
           <p className="text-sm text-gray-500">Tip: pick the top, plain ticker in the suggestions.</p>
-          <p><a className="underline" href="/">← Back to dashboard</a></p>
+          <p><Link className="underline" href="/">← Back to dashboard</Link></p>
         </div>
       </main>
     );
@@ -94,12 +94,12 @@ export default async function StockPage({ params }: { params: Promise<{ symbol: 
           <div className="rounded-2xl border border-gray-200 bg-white p-4">
             <div className="text-sm text-gray-500">News sentiment</div>
             <div className={`text-xl font-semibold ${chip(stock.newsSent * 100)}`}>{stock.newsSent.toFixed(2)}</div>
-            <div className="text-xs text-gray-500 mt-1">−1..+1 (calculated from last 30 days of headlines)</div>
+            <div className="text-xs text-gray-500 mt-1">−1..+1 (last 30 days of headlines)</div>
           </div>
           <div className="rounded-2xl border border-gray-200 bg-white p-4">
             <div className="text-sm text-gray-500">Reddit sentiment</div>
             <div className={`text-xl font-semibold ${chip(stock.redditSent * 100)}`}>{stock.redditSent.toFixed(2)}</div>
-            <div className="text-xs text-gray-500 mt-1">−1..+1 (Finnhub social or Reddit search fallback)</div>
+            <div className="text-xs text-gray-500 mt-1">−1..+1 (Finnhub social / Reddit fallback)</div>
           </div>
         </div>
 

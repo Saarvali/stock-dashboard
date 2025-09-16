@@ -31,17 +31,11 @@ export default function PriceChart({ data, note = "Indexed to 100 at period star
     if (!data?.length) return [];
     const days = RANGES.find((r) => r.key === range)?.days ?? Number.POSITIVE_INFINITY;
     const start = Math.max(0, data.length - (Number.isFinite(days) ? days : data.length));
-    const base = data[start];
-
-    const scale = (v?: number | null) =>
-      v && base.stock ? (v * (100 / base.stock)) : null;
 
     const scaleFrom = (arr: Point[], key: "stock" | "spy" | "omx") => {
       const baseVal = arr[start]?.[key];
-      return (v?: number | null) =>
-        v && baseVal ? (v * (100 / baseVal)) : null;
+      return (v?: number | null) => (v && baseVal ? (v * (100 / baseVal)) : null);
     };
-
     const scaleStock = scaleFrom(data, "stock");
     const scaleSpy = scaleFrom(data, "spy");
     const scaleOmx = scaleFrom(data, "omx");
