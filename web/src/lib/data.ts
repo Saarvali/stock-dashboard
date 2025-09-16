@@ -5,9 +5,9 @@ import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
 import { getNewsSentiment } from "@/lib/news";
 import { getRedditSentiment } from "@/lib/reddit";
 
-const BENCH = "SPY";                // Benchmark + S&P500 overlay fallback
-const DETAIL_DAYS = 2100;           // ~8 years for 5Y/MAX charts on the detail page
-const DASHBOARD_SIZE: "compact" | "full" = "compact";
+const BENCH = "SPY";
+const DETAIL_DAYS = 2100;                              // ~8y for 5Y/MAX
+const DASHBOARD_SIZE: "compact" | "full" = "full";     // full = correct 6m/12m
 
 /* ==== Types ==== */
 export type StockRow = {
@@ -74,30 +74,34 @@ type MockData = {
 const mockData = mock as unknown as MockData;
 
 /* ==== Helpers ==== */
+function relativeVsBench(closes: number[], bench: number[], targetDays: number): number {
+  const last = closes.at(-1);
+  const benchLast = bench.at(-1);
+  if (!last || !benchLast) return 0;
+
+  const n = Math.min(targetDays, closes.length - 1, bench.length - 1);
+  if (n <= 0) return 0;
+
+  const a = closes[closes.length - 1 - n];
+  const b = bench[bench.length - 1 - n];
+  return pct(a, last) - pct(b, benchLast);
+}
+
 function buildRowFromCloses(symbol: string, name: string, closes: number[], benchCloses: number[]): StockRow {
   const last = closes.at(-1) ?? 0;
   const prev = closes.at(-2) ?? last;
-  const changePctVal = pct(prev, last);
-  const benchLast = benchCloses.at(-1) ?? 0;
-
-  const rel = (days: number) => {
-    const a = closes.at(-days - 1);
-    const b = benchCloses.at(-days - 1);
-    if (!a || !b || !last || !benchLast) return 0;
-    return pct(a, last) - pct(b, benchLast);
-  };
 
   return {
     symbol: symbol.toUpperCase(),
     name,
     last,
-    changePct: changePctVal,
+    changePct: pct(prev, last),
     rsi14: rsi(closes, 14),
     sma50: sma(closes, 50),
     sma200: sma(closes, 200),
     dist52wHighPct: distFromHighPct(closes, 252),
-    m6VsBenchmarkPct: rel(126),
-    m12VsBenchmarkPct: rel(252),
+    m6VsBenchmarkPct: relativeVsBench(closes, benchCloses, 126),
+    m12VsBenchmarkPct: relativeVsBench(closes, benchCloses, 252),
     newsSent: 0,
     redditSent: 0,
     live: true,
@@ -111,27 +115,16 @@ async function fullSeriesWindow(
   try {
     const s = await finnhubDaily(symbol, days);
     return { series: s, source: "FINNHUB" };
-  } catch {
-    // fallback to Alpha Vantage (no volume)
-  }
+  } catch {}
   const s = await getDailySeries(symbol, "full");
-  const withVol: Array<SeriesPoint & { volume: number | null }> = s.map((r) => ({
-    ...r,
-    volume: null,
-  }));
+  const withVol: Array<SeriesPoint & { volume: number | null }> = s.map((r) => ({ ...r, volume: null }));
   return { series: withVol, source: "ALPHAVANTAGE" };
 }
 
-function normalizeTo100(
-  series: Array<{ date: string; close: number; volume?: number | null }>
-): ChartPoint[] {
+function normalizeTo100(series: Array<{ date: string; close: number; volume?: number | null }>): ChartPoint[] {
   if (!series.length) return [];
   const base = series[0].close || 1;
-  return series.map((r) => ({
-    date: r.date,
-    stock: (r.close / base) * 100,
-    volume: r.volume ?? null,
-  }));
+  return series.map((r) => ({ date: r.date, stock: (r.close / base) * 100, volume: r.volume ?? null }));
 }
 
 function mergeOverlays(
@@ -140,12 +133,10 @@ function mergeOverlays(
   omx?: Array<{ date: string; close: number }> | null
 ): ChartPayload {
   const normMain = normalizeTo100(main);
-
   const spyMap = new Map<string, number>(spy?.map((r) => [r.date, r.close]) ?? []);
   const omxMap = new Map<string, number>(omx?.map((r) => [r.date, r.close]) ?? []);
 
-  let spyBase = 0;
-  let omxBase = 0;
+  let spyBase = 0, omxBase = 0;
   for (const r of main) {
     if (!spyBase && spyMap.has(r.date)) spyBase = spyMap.get(r.date)!;
     if (!omxBase && omxMap.has(r.date)) omxBase = omxMap.get(r.date)!;
@@ -167,30 +158,62 @@ function mergeOverlays(
   const overlaysIncluded: string[] = [];
   if (spyBase) overlaysIncluded.push("SPY");
   if (omxBase) overlaysIncluded.push("OMXS30");
-
   return { data, overlaysIncluded, note: "Indexed to 100 at period start" };
 }
 
 async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
   try {
-    const [news, reddit] = await Promise.all([
-      getNewsSentiment(symbol),
-      getRedditSentiment(symbol),
-    ]);
+    const [news, reddit] = await Promise.all([getNewsSentiment(symbol), getRedditSentiment(symbol)]);
     row.newsSent = Number.isFinite(news) ? news : 0;
     row.redditSent = Number.isFinite(reddit) ? reddit : 0;
-  } catch {
-    // keep defaults (0)
-  }
+  } catch {}
   return row;
 }
 
-/* ==== Dashboard (compact, fast) ==== */
+/** Try Alpha Vantage, then Finnhub, then resolve via search (prefer .ST), else null */
+async function resolveCloses(symbol: string, size: "compact" | "full"): Promise<{ symbol: string; closes: number[] } | null> {
+  const symU = symbol.toUpperCase();
+
+  // 1) Alpha Vantage
+  try {
+    const s = await getDailySeries(symU, size);
+    return { symbol: symU, closes: s.map((r) => r.close) };
+  } catch {}
+
+  // 2) Finnhub (works great for .ST, .LON, etc.)
+  try {
+    const s = await finnhubDaily(symU, 420);
+    return { symbol: symU, closes: s.map((r) => r.close) };
+  } catch {}
+
+  // 3) Search & prefer .ST if present
+  try {
+    const matches = await searchSymbols(symU);
+    const best =
+      matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol ||
+      matches[0]?.symbol;
+    if (best) {
+      const bU = best.toUpperCase();
+      try {
+        const s = await finnhubDaily(bU, 420);
+        return { symbol: bU, closes: s.map((r) => r.close) };
+      } catch {
+        const s2 = await getDailySeries(bU, size);
+        return { symbol: bU, closes: s2.map((r) => r.close) };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+/* ==== Dashboard (full so 6m/12m work) ==== */
 export async function getDashboardData(): Promise<Data> {
   const watchlist = mockData.watchlist;
   const nameMap = new Map<string, string>();
-  for (const s of Object.values(mockData.stocks)) nameMap.set(s.symbol, s.name);
+  for (const s of Object.values(mockData.stocks)) nameMap.set(s.symbol.toUpperCase(), s.name);
 
+  // Benchmark
   let benchSeries: number[] = [];
   let apiAsOf = "";
   try {
@@ -204,37 +227,37 @@ export async function getDashboardData(): Promise<Data> {
 
   const entries = await Promise.all(
     watchlist.map(async (sym) => {
-      const name = nameMap.get(sym) || sym;
-      let row: StockRow | undefined;
-      try {
-        const s = await getDailySeries(sym, DASHBOARD_SIZE);
-        const closes = s.map((r) => r.close);
-        row = buildRowFromCloses(sym, name, closes, benchSeries);
-      } catch {
-        try {
-          const q = await getQuote(sym);
-          row = {
-            symbol: sym.toUpperCase(),
-            name,
-            last: q.last,
-            changePct: q.changePct,
-            rsi14: NaN,
-            sma50: NaN,
-            sma200: NaN,
-            dist52wHighPct: NaN,
-            m6VsBenchmarkPct: 0,
-            m12VsBenchmarkPct: 0,
-            newsSent: 0,
-            redditSent: 0,
-            live: false,
-          };
-        } catch {
-          const m = mockData.stocks[sym];
-          if (m) row = { ...m, live: false };
-        }
+      const name = nameMap.get(sym.toUpperCase()) || sym.toUpperCase();
+
+      const resolved = await resolveCloses(sym, DASHBOARD_SIZE);
+      if (resolved) {
+        const row = buildRowFromCloses(resolved.symbol, name, resolved.closes, benchSeries);
+        return fillSentiments(resolved.symbol, row);
       }
-      if (!row) return undefined;
-      return fillSentiments(sym, row);
+
+      // Fallback to quote-only → indicators NaN
+      try {
+        const q = await getQuote(sym);
+        return fillSentiments(sym, {
+          symbol: sym.toUpperCase(),
+          name,
+          last: q.last,
+          changePct: q.changePct,
+          rsi14: NaN,
+          sma50: NaN,
+          sma200: NaN,
+          dist52wHighPct: NaN,
+          m6VsBenchmarkPct: 0,
+          m12VsBenchmarkPct: 0,
+          newsSent: 0,
+          redditSent: 0,
+          live: false,
+        });
+      } catch {
+        const m = mockData.stocks[sym];
+        if (!m) return undefined;
+        return { ...m, live: false };
+      }
     })
   );
 
@@ -257,14 +280,12 @@ export async function getDashboardData(): Promise<Data> {
   };
 }
 
-/* ==== Dashboard for a custom watchlist (compact) ==== */
+/* ==== Dashboard for a custom watchlist ==== */
 export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
-  const wl = (watchlist || [])
-    .map((s) => s.trim().toUpperCase())
-    .filter(Boolean);
-
+  const wl = (watchlist || []).map((s) => s.trim().toUpperCase()).filter(Boolean);
   if (!wl.length) return getDashboardData();
 
+  // Benchmark
   let benchSeries: number[] = [];
   let apiAsOf = "";
   try {
@@ -278,35 +299,31 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
 
   const entries = await Promise.all(
     wl.map(async (sym) => {
-      let row: StockRow | undefined;
-      try {
-        const s = await getDailySeries(sym, DASHBOARD_SIZE);
-        const closes = s.map((r) => r.close);
-        row = buildRowFromCloses(sym, sym, closes, benchSeries);
-      } catch {
-        try {
-          const q = await getQuote(sym);
-          row = {
-            symbol: sym.toUpperCase(),
-            name: sym.toUpperCase(),
-            last: q.last,
-            changePct: q.changePct,
-            rsi14: NaN,
-            sma50: NaN,
-            sma200: NaN,
-            dist52wHighPct: NaN,
-            m6VsBenchmarkPct: 0,
-            m12VsBenchmarkPct: 0,
-            newsSent: 0,
-            redditSent: 0,
-            live: false,
-          };
-        } catch {
-          row = undefined;
-        }
+      const resolved = await resolveCloses(sym, DASHBOARD_SIZE);
+      if (resolved) {
+        const row = buildRowFromCloses(resolved.symbol, resolved.symbol, resolved.closes, benchSeries);
+        return fillSentiments(resolved.symbol, row);
       }
-      if (!row) return undefined;
-      return fillSentiments(sym, row);
+      try {
+        const q = await getQuote(sym);
+        return fillSentiments(sym, {
+          symbol: sym.toUpperCase(),
+          name: sym.toUpperCase(),
+          last: q.last,
+          changePct: q.changePct,
+          rsi14: NaN,
+          sma50: NaN,
+          sma200: NaN,
+          dist52wHighPct: NaN,
+          m6VsBenchmarkPct: 0,
+          m12VsBenchmarkPct: 0,
+          newsSent: 0,
+          redditSent: 0,
+          live: false,
+        });
+      } catch {
+        return undefined;
+      }
     })
   );
 
@@ -382,12 +399,10 @@ export async function getAnyStockDetail(
         const r2 = await fullSeriesWindow(chosen, DETAIL_DAYS);
         mainSeries = r2.series;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }
 
-  // OMXS30 overlay (deep)
+  // OMXS30 overlay
   let omxSeries: Array<{ date: string; close: number }> | null = null;
   try {
     const omx = await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], DETAIL_DAYS);
@@ -398,7 +413,7 @@ export async function getAnyStockDetail(
 
   // Build row
   let row: StockRow | undefined;
-  if (mainSeries && mainSeries.length >= 200) {
+  if (mainSeries && mainSeries.length >= 20) {
     const closes = mainSeries.map((r) => r.close);
     row = buildRowFromCloses(chosen, chosen, closes, benchCloses);
   } else {
@@ -431,10 +446,8 @@ export async function getAnyStockDetail(
     chart = mergeOverlays(mainSeries, spySeries, omxSeries);
   }
 
-  // Fill sentiments for detail row
-  if (row) {
-    row = await fillSentiments(chosen, row);
-  }
+  // Sentiments
+  if (row) row = await fillSentiments(chosen, row);
 
   const data: Data = {
     asOf,
