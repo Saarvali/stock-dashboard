@@ -46,6 +46,29 @@ export type ChartPayload = {
   note: string;
 };
 
+/* ==== Local mock typing ==== */
+type MockStock = {
+  symbol: string;
+  name: string;
+  last: number;
+  changePct: number;
+  rsi14: number;
+  sma50: number;
+  sma200: number;
+  dist52wHighPct: number;
+  m6VsBenchmarkPct: number;
+  m12VsBenchmarkPct: number;
+  newsSent: number;
+  redditSent: number;
+  live?: boolean;
+};
+type MockData = {
+  watchlist: string[];
+  portfolios?: Record<string, string[]>;
+  stocks: Record<string, MockStock>;
+};
+const mockData = mock as unknown as MockData;
+
 /* ==== Helpers ==== */
 function buildRowFromCloses(symbol: string, name: string, closes: number[], benchCloses: number[]): StockRow {
   const last = closes.at(-1) ?? 0;
@@ -77,15 +100,20 @@ function buildRowFromCloses(symbol: string, name: string, closes: number[], benc
   };
 }
 
-async function fullSeries1Y(symbol: string): Promise<{ series: (FinnhubPoint | (SeriesPoint & { volume?: number | null }))[]; source: "FINNHUB" | "ALPHAVANTAGE" }> {
+async function fullSeries1Y(
+  symbol: string
+): Promise<{ series: Array<FinnhubPoint | (SeriesPoint & { volume?: number | null })>; source: "FINNHUB" | "ALPHAVANTAGE" }> {
   try {
     const s = await finnhubDaily(symbol, 420);
     return { series: s, source: "FINNHUB" };
   } catch {
-    /* next fallback */
+    // fallback to Alpha
   }
   const s = await getDailySeries(symbol, "full");
-  const withVol = s.map((r) => ({ ...r, volume: null as number | null }));
+  const withVol: Array<SeriesPoint & { volume: number | null }> = s.map((r) => ({
+    ...r,
+    volume: null,
+  }));
   return { series: withVol, source: "ALPHAVANTAGE" };
 }
 
@@ -140,9 +168,9 @@ function mergeOverlays(
 
 /* ==== Dashboard (compact) ==== */
 export async function getDashboardData(): Promise<Data> {
-  const watchlist = mock.watchlist;
+  const watchlist = mockData.watchlist;
   const nameMap = new Map<string, string>();
-  for (const s of Object.values(mock.stocks)) nameMap.set(s.symbol, s.name);
+  for (const s of Object.values(mockData.stocks)) nameMap.set(s.symbol, s.name);
 
   let benchSeries: number[] = [];
   let apiAsOf = "";
@@ -182,9 +210,13 @@ export async function getDashboardData(): Promise<Data> {
           };
           return fallback;
         } catch {
-          const m = (mock.stocks as Record<string, StockRow | undefined>)[sym];
+          const m = mockData.stocks[sym];
           if (!m) return undefined;
-          return { ...m, live: false } as StockRow;
+          const copy: StockRow = {
+            ...m,
+            live: false,
+          };
+          return copy;
         }
       }
     })
@@ -202,7 +234,7 @@ export async function getDashboardData(): Promise<Data> {
     asOf,
     benchmark: BENCH,
     watchlist,
-    portfolios: (mock as any).portfolios,
+    portfolios: mockData.portfolios,
     stocks,
     liveCount,
     totalCount: watchlist.length,
@@ -300,8 +332,8 @@ export async function getAnyStockDetail(
         live: false,
       };
     } catch {
-      const m = (mock.stocks as Record<string, StockRow | undefined>)[chosen];
-      if (m) row = { ...m, live: false } as StockRow;
+      const m = mockData.stocks[chosen];
+      if (m) row = { ...m, live: false };
     }
   }
 

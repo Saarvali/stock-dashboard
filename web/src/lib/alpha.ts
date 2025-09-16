@@ -29,12 +29,12 @@ type AvSymbolSearch = AvErrorish & {
   }>;
 };
 
-async function getJSON<T>(url: string, revalidate = 300): Promise<T & AvErrorish> {
+async function getJSON<T extends AvErrorish>(url: string, revalidate = 300): Promise<T> {
   const res = await fetch(url, { next: { revalidate } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = (await res.json()) as T & AvErrorish;
-  if (data?.Note || data?.Information || (data as any)["Error Message"]) {
-    throw new Error(data.Note || data.Information || (data as any)["Error Message"] || "AlphaVantage error");
+  const data = (await res.json()) as T;
+  if (data.Note || data.Information || data["Error Message"]) {
+    throw new Error(data.Note ?? data.Information ?? data["Error Message"] ?? "AlphaVantage error");
   }
   return data;
 }
@@ -63,7 +63,7 @@ export async function getDailySeries(
     symbol
   )}&outputsize=${size}&apikey=${KEY}`;
   const j = await getJSON<AvTimeSeriesDaily>(url, size === "full" ? 86400 : 300);
-  const series = j["Time Series (Daily)"] ?? {};
+  const series: Record<string, { "4. close": string }> = j["Time Series (Daily)"] ?? {};
   const out: SeriesPoint[] = Object.entries(series).map(([date, v]) => ({
     date,
     close: Number(v["4. close"]),
