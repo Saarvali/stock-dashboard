@@ -1,35 +1,42 @@
-import mock from "@/data/mock-data";
-import { finnhubDailyFromCandidates, finnhubDaily } from "@/lib/finnhub";
+import { searchSymbols, type SymbolSearchResult } from "@/lib/alpha";
 
 export const dynamic = "force-dynamic";
 
-type HasWatchlist = { watchlist: string[] };
-function hasWatchlist(obj: unknown): obj is HasWatchlist {
-  if (typeof obj !== "object" || obj === null) return false;
-  const rec = obj as Record<string, unknown>;
-  return Array.isArray(rec.watchlist) && rec.watchlist.every((x) => typeof x === "string");
-}
+type Compact = { symbol: string; name: string; note?: string };
 
-export async function GET() {
-  // Warm overlays (best-effort)
-  try { await finnhubDailyFromCandidates(["SPY", "^GSPC"], 420); } catch {}
-  try { await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], 420); } catch {}
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const q = (searchParams.get("q") || "").trim();
 
-  const symbols: string[] = hasWatchlist(mock) ? mock.watchlist : [];
-  let ok = 0;
-
-  // Warm each symbol sequentially to avoid rate limits
-  for (const s of symbols) {
-    try {
-      await finnhubDaily(s, 420);
-      ok++;
-    } catch {
-      // ignore individual failures
-    }
+  if (!q) {
+    const empty: Compact[] = [];
+    return Response.json(empty);
   }
 
-  return Response.json(
-    { warmed: ok, total: symbols.length },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  try {
+    const results: SymbolSearchResult[] = await searchSymbols(q);
+
+    const sorted = [...results].sort((a, b) => {
+      const au = (a.region ?? "").includes("United States") ? 0 : 1;
+      const bu = (b.region ?? "").includes("United States") ? 0 : 1;
+      if (au !== bu) return au - bu;
+      const ad = a.symbol.includes(".") ? 1 : 0;
+      const bd = b.symbol.includes(".") ? 1 : 0;
+      if (ad !== bd) return ad - bd;
+      return a.symbol.length - b.symbol.length;
+    });
+
+    const compact: Compact[] = sorted.slice(0, 8).map((r) => ({
+      symbol: r.symbol,
+      name: r.name,
+      note: r.region && r.currency ? `${r.region} • ${r.currency}` : undefined,
+    }));
+
+    return Response.json(compact, {
+      headers: { "Cache-Control": "public, max-age=300" },
+    });
+  } catch {
+    const empty: Compact[] = [];
+    return Response.json(empty);
+  }
 }
