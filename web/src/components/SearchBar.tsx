@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 type StockMeta = { symbol: string; name: string };
 
 type Props = {
-  items: StockMeta[]; // [{ symbol: "AAPL", name: "Apple Inc." }, ...]
+  items: StockMeta[]; // local list from your dashboard data
   placeholder?: string;
   className?: string;
 };
@@ -16,24 +16,59 @@ export default function SearchBar({ items, placeholder = "Search stocks…", cla
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  const [remote, setRemote] = useState<StockMeta[]>([]);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<number | null>(null);
 
-  // Basic filter: match by symbol prefix or name substring (case-insensitive)
+  // Merge local (watchlist) and remote (Alpha Vantage) results, dedup by symbol
   const results = useMemo(() => {
     const query = q.trim().toLowerCase();
     if (!query) return [];
-    const max = 8;
-    const ranked = items
-      .map((it) => ({
-        it,
-        score: score(it, query),
-      }))
-      .filter((x) => x.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, max)
-      .map((x) => x.it);
-    return ranked;
-  }, [q, items]);
+    const localRanked = rankLocal(items, query).slice(0, 6);
+    const merged: Record<string, StockMeta> = {};
+    for (const it of localRanked) merged[it.symbol] = it;
+    for (const it of remote) {
+      const sym = it.symbol.toUpperCase();
+      if (!merged[sym]) merged[sym] = { symbol: sym, name: it.name || sym };
+    }
+    return Object.values(merged).slice(0, 8);
+  }, [q, items, remote]);
+
+  // Fetch remote suggestions with debounce
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) {
+      setRemote([]);
+      return;
+    }
+
+    // Debounce 250ms
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(async () => {
+      // cancel any in-flight request
+      if (abortRef.current) abortRef.current.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+
+      try {
+        const res = await fetch(`/api/symbols?q=${encodeURIComponent(query)}`, {
+          signal: ac.signal,
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as { symbol: string; name: string }[];
+        setRemote(data || []);
+      } catch {
+        setRemote([]);
+      }
+    }, 250);
+
+    return () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, [q]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -45,14 +80,12 @@ export default function SearchBar({ items, placeholder = "Search stocks…", cla
     return () => window.removeEventListener("click", onClick);
   }, []);
 
-  // Navigate helper
   function go(symbol: string) {
-    const slug = encodeURIComponent(symbol);
+    const slug = encodeURIComponent(symbol.toUpperCase());
     router.push(`/stock/${slug}`);
     setOpen(false);
   }
 
-  // Keyboard controls for list
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (!open && (e.key === "ArrowDown" || e.key === "Enter")) setOpen(true);
 
@@ -64,12 +97,21 @@ export default function SearchBar({ items, placeholder = "Search stocks…", cla
       setHighlight((h) => Math.max(h - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      // Enter with results → go to highlighted; else try exact symbol
       if (results.length) {
         go(results[Math.max(0, Math.min(highlight, results.length - 1))].symbol);
       } else {
-        const exact = items.find((it) => it.symbol.toLowerCase() === q.trim().toLowerCase());
-        if (exact) go(exact.symbol);
+        const text = q.trim();
+        if (!text) return;
+        // Try immediate ticker navigation
+        go(text.toUpperCase());
+        // Also resolve by name in background; navigate again if we find a better match
+        fetch(`/api/symbols?q=${encodeURIComponent(text)}`, { cache: "no-store" })
+          .then(r => r.ok ? r.json() : [])
+          .then((arr: { symbol: string; name: string }[]) => {
+            const best = arr?.[0]?.symbol;
+            if (best) go(best);
+          })
+          .catch(() => {});
       }
     } else if (e.key === "Escape") {
       setOpen(false);
@@ -102,7 +144,7 @@ export default function SearchBar({ items, placeholder = "Search stocks…", cla
         >
           {results.map((r, idx) => (
             <li
-              key={r.symbol}
+              key={`${r.symbol}-${idx}`}
               role="option"
               aria-selected={idx === highlight}
               onMouseEnter={() => setHighlight(idx)}
@@ -113,7 +155,7 @@ export default function SearchBar({ items, placeholder = "Search stocks…", cla
               } flex items-center justify-between`}
             >
               <span className="font-medium">{r.symbol}</span>
-              <span className="ml-3 text-sm text-gray-600">{r.name}</span>
+              <span className="ml-3 text-sm text-gray-600 truncate">{r.name}</span>
             </li>
           ))}
         </ul>
@@ -122,15 +164,20 @@ export default function SearchBar({ items, placeholder = "Search stocks…", cla
   );
 }
 
-/** Super lightweight scoring:
- *  - exact symbol starts-with gets higher score
- *  - symbol contains gets medium
- *  - name contains gets low
- */
-function score(it: { symbol: string; name: string }, q: string) {
+// -------- Local ranking helpers --------
+function rankLocal(items: StockMeta[], q: string) {
+  const s = q.toLowerCase();
+  return items
+    .map((it) => ({ it, score: localScore(it, s) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.it);
+}
+
+function localScore(it: StockMeta, q: string) {
   const sym = it.symbol.toLowerCase();
   const name = it.name.toLowerCase();
-  if (sym.startsWith(q)) return 100 - (sym.length - q.length); // prefer short exact prefix
+  if (sym.startsWith(q)) return 100 - Math.min(sym.length - q.length, 50);
   if (sym.includes(q)) return 60 - (sym.indexOf(q) || 0);
   if (name.includes(q)) return 30 - (name.indexOf(q) || 0);
   return 0;
