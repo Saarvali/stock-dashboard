@@ -1,11 +1,11 @@
 import mock from "@/data/mock-data";
-import { getDailySeries, getQuote, searchSymbols } from "@/lib/alpha";
-import { finnhubDaily, finnhubDailyFromCandidates } from "@/lib/finnhub";
+import { getDailySeries, getQuote, searchSymbols, type SeriesPoint } from "@/lib/alpha";
+import { finnhubDaily, finnhubDailyFromCandidates, type FinnhubPoint } from "@/lib/finnhub";
 import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
 
-const BENCH = "SPY"; // use SPY as benchmark & S&P500 overlay fallback
+const BENCH = "SPY";
 
-/* ============== Types ============== */
+/* ==== Types ==== */
 export type StockRow = {
   symbol: string;
   name: string;
@@ -34,7 +34,7 @@ export type Data = {
 
 export type ChartPoint = {
   date: string;
-  stock: number;      // normalized to 100 at start
+  stock: number;
   spy?: number | null;
   omx?: number | null;
   volume?: number | null;
@@ -42,21 +42,20 @@ export type ChartPoint = {
 
 export type ChartPayload = {
   data: ChartPoint[];
-  overlaysIncluded: string[]; // e.g., ["SPY", "^OMXS30"]
-  note: string;               // "Indexed to 100 at start"
+  overlaysIncluded: string[];
+  note: string;
 };
 
-/* ============== Helpers ============== */
-
-// Build row from a 1Y+ daily series (Finnhub preferred)
+/* ==== Helpers ==== */
 function buildRowFromCloses(symbol: string, name: string, closes: number[], benchCloses: number[]): StockRow {
-  const last = closes.at(-1)!;
+  const last = closes.at(-1) ?? 0;
   const prev = closes.at(-2) ?? last;
   const changePctVal = pct(prev, last);
-  const benchLast = benchCloses.at(-1)!;
+  const benchLast = benchCloses.at(-1) ?? 0;
 
   const rel = (days: number) => {
-    const a = closes.at(-days - 1), b = benchCloses.at(-days - 1);
+    const a = closes.at(-days - 1);
+    const b = benchCloses.at(-days - 1);
     if (!a || !b || !last || !benchLast) return 0;
     return pct(a, last) - pct(b, benchLast);
   };
@@ -78,25 +77,22 @@ function buildRowFromCloses(symbol: string, name: string, closes: number[], benc
   };
 }
 
-async function fullSeries1Y(symbol: string) {
-  // 1) Try Finnhub 1Y+ candles (preferred, with volume)
+async function fullSeries1Y(symbol: string): Promise<{ series: (FinnhubPoint | (SeriesPoint & { volume?: number | null }))[]; source: "FINNHUB" | "ALPHAVANTAGE" }> {
   try {
     const s = await finnhubDaily(symbol, 420);
-    return { series: s, source: "FINNHUB" as const };
-  } catch {}
-
-  // 2) Fallback: Alpha Vantage full daily (no volume)
-  try {
-    const s = await getDailySeries(symbol, "full");
-    const withVol = s.map((r: any) => ({ ...r, volume: null as number | null }));
-    return { series: withVol, source: "ALPHAVANTAGE" as const };
-  } catch {}
-
-  throw new Error("No series available");
+    return { series: s, source: "FINNHUB" };
+  } catch {
+    /* next fallback */
+  }
+  const s = await getDailySeries(symbol, "full");
+  const withVol = s.map((r) => ({ ...r, volume: null as number | null }));
+  return { series: withVol, source: "ALPHAVANTAGE" };
 }
 
-function normalizeTo100(series: { date: string; close: number; volume?: number | null }[]) {
-  if (!series.length) return [] as ChartPoint[];
+function normalizeTo100(
+  series: Array<{ date: string; close: number; volume?: number | null }>
+): ChartPoint[] {
+  if (!series.length) return [];
   const base = series[0].close || 1;
   return series.map((r) => ({
     date: r.date,
@@ -106,14 +102,14 @@ function normalizeTo100(series: { date: string; close: number; volume?: number |
 }
 
 function mergeOverlays(
-  main: { date: string; close: number; volume?: number | null }[],
-  spy?: { date: string; close: number }[] | null,
-  omx?: { date: string; close: number }[] | null
+  main: Array<{ date: string; close: number; volume?: number | null }>,
+  spy?: Array<{ date: string; close: number }> | null,
+  omx?: Array<{ date: string; close: number }> | null
 ): ChartPayload {
   const normMain = normalizeTo100(main);
-  const overlaysIncluded: string[] = [];
-  const spyMap = new Map(spy?.map((r) => [r.date, r.close]) ?? []);
-  const omxMap = new Map(omx?.map((r) => [r.date, r.close]) ?? []);
+
+  const spyMap = new Map<string, number>(spy?.map((r) => [r.date, r.close]) ?? []);
+  const omxMap = new Map<string, number>(omx?.map((r) => [r.date, r.close]) ?? []);
 
   let spyBase = 0;
   let omxBase = 0;
@@ -123,10 +119,7 @@ function mergeOverlays(
     if (spyBase && omxBase) break;
   }
 
-  if (spy && spy.length && spyBase) overlaysIncluded.push(spy[0]?.symbol ?? "SPY");
-  if (omx && omx.length && omxBase) overlaysIncluded.push(omx[0]?.symbol ?? "^OMXS30");
-
-  const data = normMain.map((p) => {
+  const data: ChartPoint[] = normMain.map((p) => {
     const s = spyMap.get(p.date);
     const o = omxMap.get(p.date);
     return {
@@ -138,21 +131,24 @@ function mergeOverlays(
     };
   });
 
+  const overlaysIncluded: string[] = [];
+  if (spyBase) overlaysIncluded.push("SPY");
+  if (omxBase) overlaysIncluded.push("OMXS30");
+
   return { data, overlaysIncluded, note: "Indexed to 100 at period start" };
 }
 
-/* ============== Dashboard (compact) ============== */
+/* ==== Dashboard (compact) ==== */
 export async function getDashboardData(): Promise<Data> {
   const watchlist = mock.watchlist;
   const nameMap = new Map<string, string>();
   for (const s of Object.values(mock.stocks)) nameMap.set(s.symbol, s.name);
 
-  // Benchmark via Alpha (compact is fine for dashboard)
   let benchSeries: number[] = [];
   let apiAsOf = "";
   try {
     const benchDaily = await getDailySeries(BENCH, "compact");
-    benchSeries = benchDaily.map((r: any) => r.close);
+    benchSeries = benchDaily.map((r) => r.close);
     apiAsOf = benchDaily.at(-1)?.date ?? "";
   } catch {
     benchSeries = [1, 1];
@@ -164,13 +160,12 @@ export async function getDashboardData(): Promise<Data> {
       const name = nameMap.get(sym) || sym;
       try {
         const s = await getDailySeries(sym, "compact");
-        const closes = s.map((r: any) => r.close);
+        const closes = s.map((r) => r.close);
         return buildRowFromCloses(sym, name, closes, benchSeries);
       } catch {
-        // fallback to quote-only or mock
         try {
           const q = await getQuote(sym);
-          return {
+          const fallback: StockRow = {
             symbol: sym.toUpperCase(),
             name,
             last: q.last,
@@ -184,9 +179,10 @@ export async function getDashboardData(): Promise<Data> {
             newsSent: 0,
             redditSent: 0,
             live: false,
-          } as StockRow;
+          };
+          return fallback;
         } catch {
-          const m = (mock.stocks as any)[sym];
+          const m = (mock.stocks as Record<string, StockRow | undefined>)[sym];
           if (!m) return undefined;
           return { ...m, live: false } as StockRow;
         }
@@ -213,8 +209,10 @@ export async function getDashboardData(): Promise<Data> {
   };
 }
 
-/* ============== Single symbol (1Y, overlays) ============== */
-export async function getAnyStockDetail(input: string): Promise<{ data: Data; row?: StockRow; chart?: ChartPayload }> {
+/* ==== Single symbol (1Y, overlays) ==== */
+export async function getAnyStockDetail(
+  input: string
+): Promise<{ data: Data; row?: StockRow; chart?: ChartPayload }> {
   const raw = (input || "").trim();
   if (!raw) {
     const empty: Data = {
@@ -229,28 +227,29 @@ export async function getAnyStockDetail(input: string): Promise<{ data: Data; ro
     return { data: empty, row: undefined, chart: undefined };
   }
 
-  // Benchmark (1Y) for relative performance & overlay
+  // Benchmark (1Y) & asOf
   let benchCloses: number[] = [];
   let asOf = new Date().toISOString().slice(0, 10);
-  let spySeries: { date: string; close: number }[] | null = null;
+  let spySeries: Array<{ date: string; close: number }> | null = null;
   try {
     const spy = await finnhubDailyFromCandidates(["SPY", "^GSPC"], 420);
-    spySeries = spy.series.map((r: any) => ({ ...r, symbol: spy.symbol }));
-    benchCloses = spy.series.map((r: any) => r.close);
+    spySeries = spy.series.map((r) => ({ date: r.date, close: r.close }));
+    benchCloses = spy.series.map((r) => r.close);
     asOf = spy.series.at(-1)?.date ?? asOf;
   } catch {
     try {
       const avSpy = await getDailySeries(BENCH, "full");
-      benchCloses = avSpy.map((r: any) => r.close).slice(-300);
+      benchCloses = avSpy.map((r) => r.close).slice(-300);
       asOf = avSpy.at(-1)?.date ?? asOf;
-      spySeries = avSpy.map((r: any) => ({ date: r.date, close: r.close, symbol: BENCH }));
-    } catch {}
+      spySeries = avSpy.map((r) => ({ date: r.date, close: r.close }));
+    } catch {
+      benchCloses = [1, 1];
+    }
   }
-  if (!benchCloses.length) benchCloses = [1, 1];
 
-  // Main series: try input as symbol; then resolve by search if needed
+  // Main series (try raw, then search)
   let chosen = raw.toUpperCase();
-  let mainSeries: { date: string; close: number; volume?: number | null }[] | null = null;
+  let mainSeries: Array<{ date: string; close: number; volume?: number | null }> | null = null;
   try {
     const r = await fullSeries1Y(chosen);
     mainSeries = r.series;
@@ -263,22 +262,21 @@ export async function getAnyStockDetail(input: string): Promise<{ data: Data; ro
         const r2 = await fullSeries1Y(chosen);
         mainSeries = r2.series;
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }
 
   // OMXS30 overlay (best effort)
-  let omxSeries: { date: string; close: number }[] | null = null;
+  let omxSeries: Array<{ date: string; close: number }> | null = null;
   try {
-    const omx = await finnhubDailyFromCandidates(
-      ["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"],
-      420
-    );
-    omxSeries = omx.series.map((r: any) => ({ ...r, symbol: omx.symbol }));
+    const omx = await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], 420);
+    omxSeries = omx.series.map((r) => ({ date: r.date, close: r.close }));
   } catch {
     omxSeries = null;
   }
 
-  // If we still have no main series, try quote-only then mock
+  // Build row
   let row: StockRow | undefined;
   if (mainSeries && mainSeries.length >= 200) {
     const closes = mainSeries.map((r) => r.close);
@@ -302,13 +300,13 @@ export async function getAnyStockDetail(input: string): Promise<{ data: Data; ro
         live: false,
       };
     } catch {
-      const m = (mock.stocks as any)[chosen];
+      const m = (mock.stocks as Record<string, StockRow | undefined>)[chosen];
       if (m) row = { ...m, live: false } as StockRow;
     }
   }
 
-  // Chart payload (normalized to 100)
-  let chart: ChartPayload | undefined = undefined;
+  // Chart
+  let chart: ChartPayload | undefined;
   if (mainSeries && mainSeries.length) {
     chart = mergeOverlays(mainSeries, spySeries, omxSeries);
   }

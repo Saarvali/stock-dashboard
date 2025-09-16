@@ -1,39 +1,48 @@
 const API = "https://finnhub.io/api/v1";
 const KEY = process.env.FINNHUB_API_KEY!;
 
-async function getJSON(url: string, revalidate = 86400) {
+type FinnhubCandleResponse =
+  | { s: "ok"; t: number[]; c: number[]; v?: number[] }
+  | { s: "no_data" | "error" };
+
+export type FinnhubPoint = { date: string; close: number; volume: number };
+
+async function getJSON<T>(url: string, revalidate = 86400): Promise<T> {
   const res = await fetch(url, { next: { revalidate } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data) throw new Error("Empty Finnhub response");
-  return data;
+  return (await res.json()) as T;
 }
 
-// Daily candles for ~1Y+ (420 trading days buffer)
-export async function finnhubDaily(symbol: string, days = 420) {
+// ~1Y+ (buffer) daily candles
+export async function finnhubDaily(symbol: string, days = 420): Promise<FinnhubPoint[]> {
   const to = Math.floor(Date.now() / 1000);
   const from = to - days * 86400;
   const url = `${API}/stock/candle?symbol=${encodeURIComponent(
     symbol
   )}&resolution=D&from=${from}&to=${to}&token=${KEY}`;
-  const j = await getJSON(url, 86400);
-  if (j.s !== "ok" || !Array.isArray(j.t)) throw new Error(j.s || "Finnhub candle error");
-  return j.t
-    .map((ts: number, i: number) => ({
-      date: new Date(ts * 1000).toISOString().slice(0, 10),
-      close: Number(j.c[i]),
-      volume: Number(j.v?.[i] ?? 0),
-    }))
-    .sort((a: any, b: any) => a.date.localeCompare(b.date));
+  const j = await getJSON<FinnhubCandleResponse>(url, 86400);
+  if (j.s !== "ok") throw new Error("Finnhub candle error");
+  const out: FinnhubPoint[] = j.t.map((ts, i) => ({
+    date: new Date(ts * 1000).toISOString().slice(0, 10),
+    close: Number(j.c[i]),
+    volume: Number(j.v?.[i] ?? 0),
+  }));
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
 }
 
 // Try multiple candidate symbols until one works
-export async function finnhubDailyFromCandidates(candidates: string[], days = 420) {
+export async function finnhubDailyFromCandidates(
+  candidates: string[],
+  days = 420
+): Promise<{ symbol: string; series: FinnhubPoint[] }> {
   for (const sym of candidates) {
     try {
       const series = await finnhubDaily(sym, days);
       if (series.length) return { symbol: sym, series };
-    } catch {}
+    } catch {
+      /* continue */
+    }
   }
   throw new Error("No Finnhub candidate worked");
 }

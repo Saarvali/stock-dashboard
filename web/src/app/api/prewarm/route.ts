@@ -1,21 +1,34 @@
-import mock from "@/data/mock-data";
-import { finnhubDailyFromCandidates, finnhubDaily } from "@/lib/finnhub";
+import { searchSymbols, type SymbolSearchResult } from "@/lib/alpha";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const symbols = mock.watchlist || [];
-  let ok = 0;
-  // Warm overlays
-  try { await finnhubDailyFromCandidates(["SPY", "^GSPC"], 420); } catch {}
-  try { await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], 420); } catch {}
+type Compact = { symbol: string; name: string; note?: string };
 
-  // Warm each watchlist symbol (sequential to be gentle)
-  for (const s of symbols) {
-    try {
-      await finnhubDaily(s, 420);
-      ok++;
-    } catch {}
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const q = (searchParams.get("q") || "").trim();
+  if (!q) return Response.json<Compact[]>([]);
+
+  try {
+    const results: SymbolSearchResult[] = await searchSymbols(q);
+
+    const sorted = [...results].sort((a, b) => {
+      const au = (a.region ?? "").includes("United States") ? 0 : 1;
+      const bu = (b.region ?? "").includes("United States") ? 0 : 1;
+      if (au !== bu) return au - bu;
+      const ad = a.symbol.includes(".") ? 1 : 0;
+      const bd = b.symbol.includes(".") ? 1 : 0;
+      if (ad !== bd) return ad - bd;
+      return a.symbol.length - b.symbol.length;
+    });
+
+    const compact: Compact[] = sorted.slice(0, 8).map((r) => ({
+      symbol: r.symbol,
+      name: r.name,
+      note: r.region && r.currency ? `${r.region} • ${r.currency}` : undefined,
+    }));
+    return Response.json(compact, { headers: { "Cache-Control": "public, max-age=300" } });
+  } catch {
+    return Response.json<Compact[]>([]);
   }
-  return Response.json({ warmed: ok, total: symbols.length });
 }
