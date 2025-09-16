@@ -2,8 +2,7 @@
   "crons": [
     {
       "path": "/api/prewarm",
-      "schedule": "0 4 * * *",
-      "timezone": "Europe/Stockholm"
+      "schedule": "0 2 * * *"
     }
   ]
 }
