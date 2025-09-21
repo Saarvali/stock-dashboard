@@ -1,13 +1,13 @@
 import mock from "@/data/mock-data";
 import { getDailySeries, getQuote, searchSymbols, type SeriesPoint } from "@/lib/alpha";
-import { finnhubDaily, finnhubDailyFromCandidates, type FinnhubPoint } from "@/lib/finnhub";
+import { finnhubDaily, finnhubDailyFromCandidates, finnhubSearchSymbol, finnhubQuote, type FinnhubPoint } from "@/lib/finnhub";
 import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
 import { getNewsSentiment } from "@/lib/news";
 import { getRedditSentiment } from "@/lib/reddit";
 
 const BENCH = "SPY";
-const DETAIL_DAYS = 2100;                              // ~8y for 5Y/MAX
-const DASHBOARD_SIZE: "compact" | "full" = "full";     // full = correct 6m/12m
+const DETAIL_DAYS = 2100;                          // ~8y for 5Y/MAX
+const DASHBOARD_SIZE: "compact" | "full" = "full";  // full so 6m/12m work correctly
 
 /* ==== Types ==== */
 export type StockRow = {
@@ -170,25 +170,26 @@ async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> 
   return row;
 }
 
-/** Try Alpha Vantage, then Finnhub, then resolve via search (prefer .ST), else null */
+/** Resolve a raw ticker to a working symbol & closes:
+ *  1) Alpha Vantage direct
+ *  2) Finnhub direct
+ *  3) Finnhub search (prefer .ST), then try Finnhub or Alpha Vantage
+ */
 async function resolveCloses(symbol: string, size: "compact" | "full"): Promise<{ symbol: string; closes: number[] } | null> {
   const symU = symbol.toUpperCase();
 
-  // 1) Alpha Vantage
   try {
     const s = await getDailySeries(symU, size);
     return { symbol: symU, closes: s.map((r) => r.close) };
   } catch {}
 
-  // 2) Finnhub (works great for .ST, .LON, etc.)
   try {
     const s = await finnhubDaily(symU, 420);
     return { symbol: symU, closes: s.map((r) => r.close) };
   } catch {}
 
-  // 3) Search & prefer .ST if present
   try {
-    const matches = await searchSymbols(symU);
+    const matches = await finnhubSearchSymbol(symU);
     const best =
       matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol ||
       matches[0]?.symbol;
@@ -207,7 +208,7 @@ async function resolveCloses(symbol: string, size: "compact" | "full"): Promise<
   return null;
 }
 
-/* ==== Dashboard (full so 6m/12m work) ==== */
+/* ==== Dashboard ==== */
 export async function getDashboardData(): Promise<Data> {
   const watchlist = mockData.watchlist;
   const nameMap = new Map<string, string>();
@@ -215,15 +216,13 @@ export async function getDashboardData(): Promise<Data> {
 
   // Benchmark
   let benchSeries: number[] = [];
-  let apiAsOf = "";
   try {
     const benchDaily = await getDailySeries(BENCH, DASHBOARD_SIZE);
     benchSeries = benchDaily.map((r) => r.close);
-    apiAsOf = benchDaily.at(-1)?.date ?? "";
   } catch {
     benchSeries = [1, 1];
   }
-  const asOf = apiAsOf || new Date().toISOString().slice(0, 10);
+  const asOf = new Date().toISOString().slice(0, 10);
 
   const entries = await Promise.all(
     watchlist.map(async (sym) => {
@@ -235,14 +234,14 @@ export async function getDashboardData(): Promise<Data> {
         return fillSentiments(resolved.symbol, row);
       }
 
-      // Fallback to quote-only → indicators NaN
+      // Quote-only fallback: Finnhub first, then Alpha Vantage
       try {
-        const q = await getQuote(sym);
+        const fq = await finnhubQuote(sym);
         return fillSentiments(sym, {
           symbol: sym.toUpperCase(),
           name,
-          last: q.last,
-          changePct: q.changePct,
+          last: fq.last,
+          changePct: fq.changePct,
           rsi14: NaN,
           sma50: NaN,
           sma200: NaN,
@@ -254,9 +253,28 @@ export async function getDashboardData(): Promise<Data> {
           live: false,
         });
       } catch {
-        const m = mockData.stocks[sym];
-        if (!m) return undefined;
-        return { ...m, live: false };
+        try {
+          const q = await getQuote(sym);
+          return fillSentiments(sym, {
+            symbol: sym.toUpperCase(),
+            name,
+            last: q.last,
+            changePct: q.changePct,
+            rsi14: NaN,
+            sma50: NaN,
+            sma200: NaN,
+            dist52wHighPct: NaN,
+            m6VsBenchmarkPct: 0,
+            m12VsBenchmarkPct: 0,
+            newsSent: 0,
+            redditSent: 0,
+            live: false,
+          });
+        } catch {
+          const m = mockData.stocks[sym];
+          if (!m) return undefined;
+          return { ...m, live: false };
+        }
       }
     })
   );
@@ -280,22 +298,19 @@ export async function getDashboardData(): Promise<Data> {
   };
 }
 
-/* ==== Dashboard for a custom watchlist ==== */
+/* ==== Custom watchlist ==== */
 export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
   const wl = (watchlist || []).map((s) => s.trim().toUpperCase()).filter(Boolean);
   if (!wl.length) return getDashboardData();
 
-  // Benchmark
   let benchSeries: number[] = [];
-  let apiAsOf = "";
   try {
     const benchDaily = await getDailySeries(BENCH, DASHBOARD_SIZE);
     benchSeries = benchDaily.map((r) => r.close);
-    apiAsOf = benchDaily.at(-1)?.date ?? "";
   } catch {
     benchSeries = [1, 1];
   }
-  const asOf = apiAsOf || new Date().toISOString().slice(0, 10);
+  const asOf = new Date().toISOString().slice(0, 10);
 
   const entries = await Promise.all(
     wl.map(async (sym) => {
@@ -305,12 +320,12 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
         return fillSentiments(resolved.symbol, row);
       }
       try {
-        const q = await getQuote(sym);
+        const fq = await finnhubQuote(sym);
         return fillSentiments(sym, {
           symbol: sym.toUpperCase(),
           name: sym.toUpperCase(),
-          last: q.last,
-          changePct: q.changePct,
+          last: fq.last,
+          changePct: fq.changePct,
           rsi14: NaN,
           sma50: NaN,
           sma200: NaN,
@@ -322,7 +337,26 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
           live: false,
         });
       } catch {
-        return undefined;
+        try {
+          const q = await getQuote(sym);
+          return fillSentiments(sym, {
+            symbol: sym.toUpperCase(),
+            name: sym.toUpperCase(),
+            last: q.last,
+            changePct: q.changePct,
+            rsi14: NaN,
+            sma50: NaN,
+            sma200: NaN,
+            dist52wHighPct: NaN,
+            m6VsBenchmarkPct: 0,
+            m12VsBenchmarkPct: 0,
+            newsSent: 0,
+            redditSent: 0,
+            live: false,
+          });
+        } catch {
+          return undefined;
+        }
       }
     })
   );
@@ -346,7 +380,7 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
   };
 }
 
-/* ==== Single symbol (deep history, overlays) ==== */
+/* ==== Single symbol detail (deep history + overlays) ==== */
 export async function getAnyStockDetail(
   input: string
 ): Promise<{ data: Data; row?: StockRow; chart?: ChartPayload }> {
@@ -364,7 +398,7 @@ export async function getAnyStockDetail(
     return { data: empty, row: undefined, chart: undefined };
   }
 
-  // Benchmark (deep) & asOf
+  // Benchmark deep
   let benchCloses: number[] = [];
   let asOf = new Date().toISOString().slice(0, 10);
   let spySeries: Array<{ date: string; close: number }> | null = null;
@@ -384,7 +418,7 @@ export async function getAnyStockDetail(
     }
   }
 
-  // Main series (try raw, then resolve via search)
+  // Main series
   let chosen = raw.toUpperCase();
   let mainSeries: Array<{ date: string; close: number; volume?: number | null }> | null = null;
   try {
@@ -392,14 +426,27 @@ export async function getAnyStockDetail(
     mainSeries = r.series;
   } catch {
     try {
-      const matches = await searchSymbols(raw);
-      const best = matches?.[0]?.symbol?.toUpperCase();
+      const matches = await finnhubSearchSymbol(raw);
+      const best =
+        matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol ||
+        matches[0]?.symbol;
       if (best) {
-        chosen = best;
+        chosen = best.toUpperCase();
         const r2 = await fullSeriesWindow(chosen, DETAIL_DAYS);
         mainSeries = r2.series;
       }
     } catch {}
+    if (!mainSeries) {
+      try {
+        const matches = await searchSymbols(raw);
+        const best = matches?.[0]?.symbol?.toUpperCase();
+        if (best) {
+          chosen = best;
+          const r3 = await fullSeriesWindow(chosen, DETAIL_DAYS);
+          mainSeries = r3.series;
+        }
+      } catch {}
+    }
   }
 
   // OMXS30 overlay
@@ -418,12 +465,12 @@ export async function getAnyStockDetail(
     row = buildRowFromCloses(chosen, chosen, closes, benchCloses);
   } else {
     try {
-      const q = await getQuote(chosen);
+      const fq = await finnhubQuote(chosen);
       row = {
         symbol: chosen,
         name: chosen,
-        last: q.last,
-        changePct: q.changePct,
+        last: fq.last,
+        changePct: fq.changePct,
         rsi14: NaN,
         sma50: NaN,
         sma200: NaN,
@@ -435,8 +482,27 @@ export async function getAnyStockDetail(
         live: false,
       };
     } catch {
-      const m = mockData.stocks[chosen];
-      if (m) row = { ...m, live: false };
+      try {
+        const q = await getQuote(chosen);
+        row = {
+          symbol: chosen,
+          name: chosen,
+          last: q.last,
+          changePct: q.changePct,
+          rsi14: NaN,
+          sma50: NaN,
+          sma200: NaN,
+          dist52wHighPct: NaN,
+          m6VsBenchmarkPct: 0,
+          m12VsBenchmarkPct: 0,
+          newsSent: 0,
+          redditSent: 0,
+          live: false,
+        };
+      } catch {
+        const m = mockData.stocks[chosen];
+        if (m) row = { ...m, live: false };
+      }
     }
   }
 
