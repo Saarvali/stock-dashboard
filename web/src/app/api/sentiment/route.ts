@@ -17,10 +17,8 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Fail-safe if keys missing (still return 0s instead of 500)
-    const hasFinnhub = !!process.env.FINNHUB_API_KEY;
+    const hasFinnhub = Boolean(process.env.FINNHUB_API_KEY);
 
-    // Compute in parallel
     const [news, reddit] = await Promise.all([
       hasFinnhub ? getNewsSentiment(symbol) : Promise.resolve(0),
       hasFinnhub ? getRedditSentiment(symbol) : Promise.resolve(0),
@@ -30,11 +28,10 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         "content-type": "application/json",
-        // cache client-side a bit; server can revalidate as needed
         "cache-control": "public, max-age=300",
       },
     });
-  } catch (err) {
+  } catch {
     return new Response(JSON.stringify({ error: "Sentiment route failed" }), {
       status: 500,
       headers: { "content-type": "application/json" },
