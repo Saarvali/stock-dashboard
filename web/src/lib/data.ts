@@ -6,9 +6,6 @@ import { distFromHighPct } from "@/lib/indicators";
 import { finnhubDaily } from "@/lib/finnhub";
 import { getDailySeries } from "@/lib/alpha";
 
-// fallback mock data
-import mock from "../mock-data.json";
-
 // ----------------------------
 // Types
 // ----------------------------
@@ -18,8 +15,8 @@ export type StockRow = {
   price: number;
   change: number;
   changePct: number;
-  newsSent: number;
-  redditSent: number;
+  newsSent: number;   // [-1..+1]
+  redditSent: number; // [-1..+1]
 };
 
 export type StockDetail = {
@@ -38,11 +35,13 @@ export type StockDetail = {
 // ----------------------------
 // Helpers
 // ----------------------------
+
+/** Fill news/reddit sentiment (safe fallbacks to 0). */
 async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
   try {
     const [news, reddit] = await Promise.all([
       getNewsSentiment(symbol),
-      getRedditSentiment(symbol, row.name),
+      getRedditSentiment(symbol, row.name), // pass company name as hint for Reddit search
     ]);
     row.newsSent = Number.isFinite(news) ? news : 0;
     row.redditSent = Number.isFinite(reddit) ? reddit : 0;
@@ -52,84 +51,90 @@ async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> 
   return row;
 }
 
+/** Build a StockRow from the latest two daily bars. */
+function rowFromDaily(symbol: string, name: string, series: Array<{ close: number }> | null | undefined): StockRow {
+  const last = Array.isArray(series) && series.length > 0 ? series[0] : undefined;
+  const prev = Array.isArray(series) && series.length > 1 ? series[1] : undefined;
+
+  const price = last?.close ?? 0;
+  const change = prev ? price - prev.close : 0;
+  const changePct = prev && prev.close !== 0 ? (change / prev.close) * 100 : 0;
+
+  return {
+    symbol,
+    name,
+    price,
+    change,
+    changePct,
+    newsSent: 0,
+    redditSent: 0,
+  };
+}
+
 // ----------------------------
 // Dashboard data
 // ----------------------------
+
+/**
+ * Default dashboard (use your own watchlist source if you want).
+ * Returns an array of StockRow used by the table.
+ */
 export async function getDashboardData(): Promise<StockRow[]> {
-  try {
-    const symbols = ["AAPL", "TSLA", "MSFT", "VOLV-B.ST"];
+  // You can change this default list; the UI also supports ?wl=... in the URL.
+  const symbols = ["AAPL", "TSLA", "MSFT", "VOLV-B.ST"];
 
-    const rows: StockRow[] = await Promise.all(
-      symbols.map(async (s) => {
-        // Alpha Vantage daily
-        const series = await getDailySeries(s);
-        const last = series?.[0];
-        const prev = series?.[1];
+  const rows = await Promise.all(
+    symbols.map(async (s) => {
+      const series = await getDailySeries(s).catch(() => null);
+      let row = rowFromDaily(s, s, series);
+      row = await fillSentiments(s, row);
+      return row;
+    })
+  );
 
-        const price = last?.close ?? 0;
-        const change = prev ? price - prev.close : 0;
-        const changePct = prev ? (change / prev.close) * 100 : 0;
-
-        let row: StockRow = {
-          symbol: s,
-          name: s,
-          price,
-          change,
-          changePct,
-          newsSent: 0,
-          redditSent: 0,
-        };
-
-        row = await fillSentiments(s, row);
-        return row;
-      })
-    );
-
-    return rows;
-  } catch {
-    return (mock as StockRow[]) || [];
-  }
+  return rows;
 }
 
+/**
+ * Dashboard for a provided list of symbols.
+ */
 export async function getDashboardDataFor(symbols: string[]): Promise<StockRow[]> {
-  try {
-    const rows: StockRow[] = await Promise.all(
-      symbols.map(async (s) => {
-        const series = await getDailySeries(s);
-        const last = series?.[0];
-        const prev = series?.[1];
+  const rows = await Promise.all(
+    symbols.map(async (s) => {
+      const series = await getDailySeries(s).catch(() => null);
+      let row = rowFromDaily(s, s, series);
+      row = await fillSentiments(s, row);
+      return row;
+    })
+  );
 
-        const price = last?.close ?? 0;
-        const change = prev ? price - prev.close : 0;
-        const changePct = prev ? (change / prev.close) * 100 : 0;
-
-        let row: StockRow = {
-          symbol: s,
-          name: s,
-          price,
-          change,
-          changePct,
-          newsSent: 0,
-          redditSent: 0,
-        };
-
-        row = await fillSentiments(s, row);
-        return row;
-      })
-    );
-    return rows;
-  } catch {
-    return (mock as StockRow[]) || [];
-  }
+  return rows;
 }
 
 // ----------------------------
 // Stock detail data
 // ----------------------------
-export async function getAnyStockDetail(symbol: string): Promise<StockDetail> {
-  const series = await getDailySeries(symbol);
-  const last = series?.[0];
-  const prev = series?.[1];
 
-  const price = last?.close ?? 0;
-  const change = prev ? price - pr
+/**
+ * Single-stock detail used by /stock/[symbol]
+ */
+export async function getAnyStockDetail(symbol: string): Promise<StockDetail> {
+  const series = await getDailySeries(symbol).catch(() => null);
+  const base = rowFromDaily(symbol, symbol, series);
+  const withSent = await fillSentiments(symbol, base);
+
+  // Indicators (match your indicators.ts actual exports)
+  const indicators = {
+    distFromHighPct: await distFromHighPct(symbol).catch(() => 0),
+  };
+
+  // Price history from finnhub (match your finnhub.ts export)
+  const history = await finnhubDaily(symbol).catch(() => [] as Array<{ t: number; c: number }>);
+
+  return {
+    ...withSent,
+    indicators,
+    history,
+    overview: { source: "Alpha Vantage" }, // placeholder meta
+  };
+}
