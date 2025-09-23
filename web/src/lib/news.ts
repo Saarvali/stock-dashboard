@@ -1,3 +1,4 @@
+// src/lib/news.ts
 import { averageSentiment } from "@/lib/sentiment";
 
 const API = "https://finnhub.io/api/v1";
@@ -7,11 +8,11 @@ type FinnhubNewsItem = {
   category?: string;
   datetime?: number; // unix seconds
   headline?: string;
+  summary?: string;
   id?: number;
   image?: string;
   related?: string;
   source?: string;
-  summary?: string;
   url?: string;
 };
 
@@ -23,6 +24,8 @@ async function getJSON<T>(url: string, revalidate = 3600): Promise<T> {
 
 /** Returns sentiment in [-1..+1]; 0 if nothing to score. */
 export async function getNewsSentiment(symbol: string): Promise<number> {
+  if (!KEY) return 0;
+
   // last 30 days window
   const to = new Date();
   const from = new Date(to.getTime() - 30 * 86400 * 1000);
@@ -32,14 +35,13 @@ export async function getNewsSentiment(symbol: string): Promise<number> {
   const url = `${API}/company-news?symbol=${encodeURIComponent(symbol)}&from=${fromStr}&to=${toStr}&token=${KEY}`;
   try {
     const items = await getJSON<FinnhubNewsItem[]>(url, 1800);
-    const headlines = (items || [])
-      .map((x) => String(x.headline || "").trim())
-      .filter((h) => h.length > 0)
-      .slice(0, 50); // cap for speed
-    if (!headlines.length) return 0;
-    return averageSentiment(headlines);
+    const texts = (items || [])
+      .flatMap((x) => [x.headline, x.summary])
+      .map((t) => String(t || "").trim())
+      .filter((t) => t.length > 0);
+    if (!texts.length) return 0;
+    return averageSentiment(texts.slice(0, 80)); // cap for speed
   } catch {
-    // Fail safe: neutral
-    return 0;
+    return 0; // neutral on failure
   }
 }
