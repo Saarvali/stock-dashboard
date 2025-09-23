@@ -2,12 +2,12 @@
 
 import { getNewsSentiment } from "@/lib/news";
 import { getRedditSentiment } from "@/lib/reddit";
-import { getIndicators } from "@/lib/indicators";
-import { getPriceHistory } from "@/lib/finnhub";
-import { getOverview } from "@/lib/alpha";
+import { distFromHighPct } from "@/lib/indicators";
+import { finnhubDaily } from "@/lib/finnhub";
+import { getDailySeries } from "@/lib/alpha";
 
-// Optional: keep local mock data as fallback for dev/testing
-import mock from "@/mock-data.json";
+// fallback mock data
+import mock from "../mock-data.json";
 
 // ----------------------------
 // Types
@@ -38,12 +38,11 @@ export type StockDetail = {
 // ----------------------------
 // Helpers
 // ----------------------------
-
 async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
   try {
     const [news, reddit] = await Promise.all([
       getNewsSentiment(symbol),
-      getRedditSentiment(symbol, row.name), // pass company/name as hint
+      getRedditSentiment(symbol, row.name),
     ]);
     row.newsSent = Number.isFinite(news) ? news : 0;
     row.redditSent = Number.isFinite(reddit) ? reddit : 0;
@@ -56,23 +55,24 @@ async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> 
 // ----------------------------
 // Dashboard data
 // ----------------------------
-
 export async function getDashboardData(): Promise<StockRow[]> {
   try {
-    // TODO: replace with your own watchlist storage (DB, file, etc.)
     const symbols = ["AAPL", "TSLA", "MSFT", "VOLV-B.ST"];
 
     const rows: StockRow[] = await Promise.all(
       symbols.map(async (s) => {
-        const overview = await getOverview(s);
-        const price = typeof overview.price === "number" ? overview.price : 0;
-        const change = typeof overview.change === "number" ? overview.change : 0;
-        const changePct =
-          typeof overview.changePct === "number" ? overview.changePct : 0;
+        // Alpha Vantage daily
+        const series = await getDailySeries(s);
+        const last = series?.[0];
+        const prev = series?.[1];
+
+        const price = last?.close ?? 0;
+        const change = prev ? price - prev.close : 0;
+        const changePct = prev ? (change / prev.close) * 100 : 0;
 
         let row: StockRow = {
           symbol: s,
-          name: overview.name || s,
+          name: s,
           price,
           change,
           changePct,
@@ -87,7 +87,6 @@ export async function getDashboardData(): Promise<StockRow[]> {
 
     return rows;
   } catch {
-    // fallback: mock data if APIs fail
     return (mock as StockRow[]) || [];
   }
 }
@@ -96,15 +95,17 @@ export async function getDashboardDataFor(symbols: string[]): Promise<StockRow[]
   try {
     const rows: StockRow[] = await Promise.all(
       symbols.map(async (s) => {
-        const overview = await getOverview(s);
-        const price = typeof overview.price === "number" ? overview.price : 0;
-        const change = typeof overview.change === "number" ? overview.change : 0;
-        const changePct =
-          typeof overview.changePct === "number" ? overview.changePct : 0;
+        const series = await getDailySeries(s);
+        const last = series?.[0];
+        const prev = series?.[1];
+
+        const price = last?.close ?? 0;
+        const change = prev ? price - prev.close : 0;
+        const changePct = prev ? (change / prev.close) * 100 : 0;
 
         let row: StockRow = {
           symbol: s,
-          name: overview.name || s,
+          name: s,
           price,
           change,
           changePct,
@@ -125,35 +126,10 @@ export async function getDashboardDataFor(symbols: string[]): Promise<StockRow[]
 // ----------------------------
 // Stock detail data
 // ----------------------------
-
 export async function getAnyStockDetail(symbol: string): Promise<StockDetail> {
-  const overview = await getOverview(symbol);
-  const price = typeof overview.price === "number" ? overview.price : 0;
-  const change = typeof overview.change === "number" ? overview.change : 0;
-  const changePct =
-    typeof overview.changePct === "number" ? overview.changePct : 0;
+  const series = await getDailySeries(symbol);
+  const last = series?.[0];
+  const prev = series?.[1];
 
-  let row: StockRow = {
-    symbol,
-    name: overview.name || symbol,
-    price,
-    change,
-    changePct,
-    newsSent: 0,
-    redditSent: 0,
-  };
-
-  row = await fillSentiments(symbol, row);
-
-  const [indicators, history] = await Promise.all([
-    getIndicators(symbol),
-    getPriceHistory(symbol),
-  ]);
-
-  return {
-    ...row,
-    indicators,
-    history,
-    overview,
-  };
-}
+  const price = last?.close ?? 0;
+  const change = prev ? price - pr
