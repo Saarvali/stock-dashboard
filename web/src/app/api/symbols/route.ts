@@ -1,44 +1,69 @@
-import { NextResponse } from "next/server";
-import { searchSymbols, type SymbolSearchResult } from "@/lib/alpha";
+// src/app/api/symbols/route.ts
+import { NextRequest } from "next/server";
+import { finnhubSearchSymbol } from "@/lib/finnhub";
+import { searchSymbols as alphaSearchSymbols } from "@/lib/alpha";
 
 export const dynamic = "force-dynamic";
 
-type Compact = { symbol: string; name: string; note?: string };
+type Out = { symbol: string; name: string };
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const q = (searchParams.get("q") || "").trim();
-
-  if (!q) return NextResponse.json<Compact[]>([]);
-
+export async function GET(req: NextRequest) {
   try {
-    const results: SymbolSearchResult[] = await searchSymbols(q);
+    const { searchParams } = new URL(req.url);
+    const q = (searchParams.get("q") || "").trim();
+    if (!q) {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
 
-    // Neutral ranking: symbol startsWith > contains > name contains; shorter symbols first
-    const s = q.toLowerCase();
-    const score = (r: SymbolSearchResult) => {
-      const sym = r.symbol.toLowerCase();
-      const name = (r.name || "").toLowerCase();
-      if (sym.startsWith(s)) return 100 - Math.min(sym.length - s.length, 50);
-      if (sym.includes(s)) return 60 - (sym.indexOf(s) || 0);
-      if (name.includes(s)) return 30 - (name.indexOf(s) || 0);
-      return 0;
-    };
+    // Fetch both, tolerate failures individually
+    const [fh, av] = await Promise.allSettled([
+      finnhubSearchSymbol(q),
+      alphaSearchSymbols(q),
+    ]);
 
-    const sorted = results
-      .map((r) => ({ r, k: score(r) }))
-      .filter((x) => x.k > 0)
-      .sort((a, b) => (b.k - a.k) || (a.r.symbol.length - b.r.symbol.length))
-      .map((x) => x.r);
+    const items: Out[] = [];
 
-    const compact: Compact[] = sorted.slice(0, 8).map((r) => ({
-      symbol: r.symbol,
-      name: r.name,
-      note: r.region && r.currency ? `${r.region} • ${r.currency}` : undefined,
-    }));
+    if (fh.status === "fulfilled" && Array.isArray(fh.value)) {
+      for (const it of fh.value) {
+        const s = String((it as any).symbol || "").toUpperCase();
+        const n = String((it as any).description || s);
+        if (s) items.push({ symbol: s, name: n });
+      }
+    }
 
-    return NextResponse.json(compact, { headers: { "Cache-Control": "public, max-age=300" } });
+    if (av.status === "fulfilled" && Array.isArray(av.value)) {
+      for (const it of av.value) {
+        const s = String((it as any).symbol || "").toUpperCase();
+        const n = String((it as any).name || s);
+        if (s) items.push({ symbol: s, name: n });
+      }
+    }
+
+    // Dedupe by symbol, keep first occurrence
+    const seen = new Set<string>();
+    const merged = items.filter((x) => {
+      if (seen.has(x.symbol)) return false;
+      seen.add(x.symbol);
+      return true;
+    });
+
+    // Keep it tidy
+    const out = merged.slice(0, 20);
+
+    return new Response(JSON.stringify(out), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "public, max-age=600",
+      },
+    });
   } catch {
-    return NextResponse.json<Compact[]>([]);
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   }
 }
