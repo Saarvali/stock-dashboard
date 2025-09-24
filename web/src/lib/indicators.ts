@@ -6,11 +6,10 @@ export function sma(values: number[], window: number) {
   return sum / window;
 }
 
-// Simple RSI(14)
 export function rsi(values: number[], period = 14) {
   if (values.length < period + 1) return NaN;
   let gains = 0, losses = 0;
-  for (let i = values.length - period; i < values.length; i++) {
+  for (let i = values.length - period + 1; i < values.length; i++) {
     const diff = values[i] - values[i - 1];
     if (diff >= 0) gains += diff; else losses -= diff;
   }
@@ -27,10 +26,10 @@ export function pct(from: number, to: number) {
 }
 
 /** % distance from the highest close in the given window (negative when below the high). */
-export function distFromHighPct(values: number[], window = 252 /* ~52w trading days */) {
+export function distFromHighPct(values: number[], window = 252) {
   const slice = values.slice(-window);
   if (slice.length === 0) return NaN;
-  const high = Math.max(...slice);      // ← fixed spread operator
+  const high = Math.max(...slice);           // ← important: spread operator
   const last = slice[slice.length - 1];
-  return pct(high, last);               // negative if below high
+  return pct(high, last);                    // negative if below high
 }

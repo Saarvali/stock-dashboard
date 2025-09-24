@@ -41,7 +41,7 @@ export default function DashboardClient({
       : (initialWatchlist.length ? initialWatchlist : rows.map((r) => r.symbol.toUpperCase()));
   }, [sp, initialWatchlist, rows]);
 
-  // Persist last non-empty WL in localStorage as a convenience
+  // Persist WL locally
   useEffect(() => {
     try {
       if (currentWlFromUrl.length) {
@@ -50,7 +50,7 @@ export default function DashboardClient({
     } catch {}
   }, [currentWlFromUrl]);
 
-  // Filtered visible rows (client-side)
+  // Filter rows by current WL + search
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const visible = rows.filter((r) =>
@@ -64,10 +64,9 @@ export default function DashboardClient({
     );
   }, [rows, currentWlFromUrl, query]);
 
-  // Helpers to sync ?wl=... and trigger server refresh
+  // Sync ?wl=...
   function commitWatchlist(next: string[]) {
     const dedup = Array.from(new Set(next.map((s) => s.toUpperCase())));
-
     try {
       localStorage.setItem("watchlist", JSON.stringify(dedup));
     } catch {}
@@ -144,7 +143,7 @@ export default function DashboardClient({
                   </Link>
                   <div className="text-xs text-gray-500">{r.name}</div>
                 </td>
-                <td className="px-3 py-3">{r.price.toFixed(2)}</td>
+                <td className="px-3 py-3">{r.last.toFixed(2)}</td>
                 <td className={`px-3 py-3 font-medium ${chip(r.changePct)}`}>
                   {fmtPct(r.changePct, 2)}
                 </td>
@@ -170,7 +169,6 @@ export default function DashboardClient({
         </table>
       </div>
 
-      {/* Small hint about how the URL sync works */}
       <p className="text-xs text-gray-500">
         Tip: your watchlist is synced to the URL parameter <code>?wl=</code> and saved to{" "}
         <code>localStorage</code> on this device.

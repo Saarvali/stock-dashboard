@@ -1,4 +1,9 @@
 // src/lib/data.ts
+import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
+import { getNewsSentiment } from "@/lib/news";
+import { getRedditSentiment } from "@/lib/reddit";
+
+// Your alpha/finnhub helpers (use the names you actually have)
 import { getDailySeries, getQuote, searchSymbols, type SeriesPoint } from "@/lib/alpha";
 import {
   finnhubDaily,
@@ -7,15 +12,9 @@ import {
   finnhubQuote,
   type FinnhubPoint,
 } from "@/lib/finnhub";
-import { sma, rsi, pct, distFromHighPct } from "@/lib/indicators";
-import { getNewsSentiment } from "@/lib/news";
-import { getRedditSentiment } from "@/lib/reddit";
 
-const BENCH = "SPY";
-const DETAIL_DAYS = 2100;                          // ~8y for 5Y/MAX
-const DASHBOARD_SIZE: "compact" | "full" = "full";  // full so 6m/12m work correctly
+/* ================= Types ================= */
 
-/* ==== Types ==== */
 export type StockRow = {
   symbol: string;
   name: string;
@@ -56,42 +55,28 @@ export type ChartPayload = {
   note: string;
 };
 
-/* ==== Light in-memory mock so you don't need a file ==== */
-type MockData = {
-  watchlist: string[];
-  portfolios?: Record<string, string[]>;
-  stocks: Record<
-    string,
-    {
-      symbol: string;
-      name: string;
-      last: number;
-      changePct: number;
-      rsi14: number;
-      sma50: number;
-      sma200: number;
-      dist52wHighPct: number;
-      m6VsBenchmarkPct: number;
-      m12VsBenchmarkPct: number;
-      newsSent: number;
-      redditSent: number;
-      live?: boolean;
-    }
-  >;
-};
-const mockData: MockData = {
-  watchlist: ["AAPL", "TSLA", "VOLV-B.ST"],
-  portfolios: {},
-  stocks: {},
+export type StockDetail = {
+  data: Data;
+  row?: StockRow;
+  chart?: ChartPayload;
 };
 
-/* ==== Helpers ==== */
-function relativeVsBench(closes: number[], bench: number[], targetDays: number): number {
+/* ============== Constants & tiny mock ============== */
+
+const BENCH = "SPY";
+const DETAIL_DAYS = 2100;                          // deep for MAX views
+const DASHBOARD_SIZE: "compact" | "full" = "full";  // keep "full" for stable indicators
+
+const mockWatchlist = ["AAPL", "TSLA", "VOLV-B.ST"];
+
+/* ================= Helpers ================= */
+
+function relativeVsBench(closes: number[], bench: number[], days: number): number {
   const last = closes.at(-1);
   const benchLast = bench.at(-1);
   if (!last || !benchLast) return 0;
 
-  const n = Math.min(targetDays, closes.length - 1, bench.length - 1);
+  const n = Math.min(days, closes.length - 1, bench.length - 1);
   if (n <= 0) return 0;
 
   const a = closes[closes.length - 1 - n];
@@ -111,7 +96,7 @@ function buildRowFromCloses(symbol: string, name: string, closes: number[], benc
     rsi14: rsi(closes, 14),
     sma50: sma(closes, 50),
     sma200: sma(closes, 200),
-    dist52wHighPct: distFromHighPct(closes, 252),             // ← correct param type
+    dist52wHighPct: distFromHighPct(closes, 252),
     m6VsBenchmarkPct: relativeVsBench(closes, benchCloses, 126),
     m12VsBenchmarkPct: relativeVsBench(closes, benchCloses, 252),
     newsSent: 0,
@@ -120,17 +105,53 @@ function buildRowFromCloses(symbol: string, name: string, closes: number[], benc
   };
 }
 
-async function fullSeriesWindow(
-  symbol: string,
-  days: number
-): Promise<{ series: Array<FinnhubPoint | (SeriesPoint & { volume?: number | null })>; source: "FINNHUB" | "ALPHAVANTAGE" }> {
+async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
   try {
-    const s = await finnhubDaily(symbol, days);
-    return { series: s, source: "FINNHUB" };
+    const [news, reddit] = await Promise.all([
+      getNewsSentiment(symbol),
+      getRedditSentiment(symbol, row.name),
+    ]);
+    row.newsSent = Number.isFinite(news) ? news : 0;
+    row.redditSent = Number.isFinite(reddit) ? reddit : 0;
   } catch {}
-  const s = await getDailySeries(symbol, "full");
-  const withVol: Array<SeriesPoint & { volume: number | null }> = s.map((r) => ({ ...r, volume: null }));
-  return { series: withVol, source: "ALPHAVANTAGE" };
+  return row;
+}
+
+async function resolveCloses(
+  symbol: string,
+  size: "compact" | "full"
+): Promise<{ symbol: string; closes: number[] } | null> {
+  const symU = symbol.toUpperCase();
+
+  // Alpha
+  try {
+    const s = await getDailySeries(symU, size);
+    return { symbol: symU, closes: s.map((r) => r.close) };
+  } catch {}
+
+  // Finnhub
+  try {
+    const s = await finnhubDaily(symU, 420);
+    return { symbol: symU, closes: s.map((r) => r.close) };
+  } catch {}
+
+  // Try searching
+  try {
+    const matches = await finnhubSearchSymbol(symU);
+    const best = matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol || matches[0]?.symbol;
+    if (best) {
+      const bU = best.toUpperCase();
+      try {
+        const s = await finnhubDaily(bU, 420);
+        return { symbol: bU, closes: s.map((r) => r.close) };
+      } catch {
+        const s2 = await getDailySeries(bU, size);
+        return { symbol: bU, closes: s2.map((r) => r.close) };
+      }
+    }
+  } catch {}
+
+  return null;
 }
 
 function normalizeTo100(series: Array<{ date: string; close: number; volume?: number | null }>): ChartPoint[] {
@@ -173,66 +194,21 @@ function mergeOverlays(
   return { data, overlaysIncluded, note: "Indexed to 100 at period start" };
 }
 
-async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
-  try {
-    const [news, reddit] = await Promise.all([getNewsSentiment(symbol), getRedditSentiment(symbol)]);
-    row.newsSent = Number.isFinite(news) ? news : 0;
-    row.redditSent = Number.isFinite(reddit) ? reddit : 0;
-  } catch {}
-  return row;
-}
+/* ================= Public APIs used by pages ================= */
 
-/** Resolve to a working ticker + closes (Alpha → Finnhub → search) */
-async function resolveCloses(
-  symbol: string,
-  size: "compact" | "full"
-): Promise<{ symbol: string; closes: number[] } | null> {
-  const symU = symbol.toUpperCase();
-
-  try {
-    const s = await getDailySeries(symU, size);
-    return { symbol: symU, closes: s.map((r) => r.close) };
-  } catch {}
-
-  try {
-    const s = await finnhubDaily(symU, 420);
-    return { symbol: symU, closes: s.map((r) => r.close) };
-  } catch {}
-
-  try {
-    const matches = await finnhubSearchSymbol(symU);
-    const best = matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol || matches[0]?.symbol;
-    if (best) {
-      const bU = best.toUpperCase();
-      try {
-        const s = await finnhubDaily(bU, 420);
-        return { symbol: bU, closes: s.map((r) => r.close) };
-      } catch {
-        const s2 = await getDailySeries(bU, size);
-        return { symbol: bU, closes: s2.map((r) => r.close) };
-      }
-    }
-  } catch {}
-
-  return null;
-}
-
-/* ==== Dashboard (default watchlist) ==== */
+/** Default dashboard data (object with .stocks). */
 export async function getDashboardData(): Promise<Data> {
-  const watchlist = mockData.watchlist;
-
-  // Benchmark
+  // Benchmark series
   let benchSeries: number[] = [];
   try {
-    const benchDaily = await getDailySeries(BENCH, DASHBOARD_SIZE);
-    benchSeries = benchDaily.map((r) => r.close);
+    const bench = await getDailySeries(BENCH, DASHBOARD_SIZE);
+    benchSeries = bench.map((r) => r.close);
   } catch {
     benchSeries = [1, 1];
   }
-  const asOf = new Date().toISOString().slice(0, 10);
 
   const entries = await Promise.all(
-    watchlist.map(async (sym) => {
+    mockWatchlist.map(async (sym) => {
       const name = sym.toUpperCase();
 
       const resolved = await resolveCloses(sym, DASHBOARD_SIZE);
@@ -241,7 +217,7 @@ export async function getDashboardData(): Promise<Data> {
         return fillSentiments(resolved.symbol, row);
       }
 
-      // Quote-only fallback: Finnhub first, then Alpha Vantage
+      // quote-only fallback
       try {
         const fq = await finnhubQuote(sym);
         return fillSentiments(sym, {
@@ -293,29 +269,28 @@ export async function getDashboardData(): Promise<Data> {
   }
 
   return {
-    asOf,
+    asOf: new Date().toISOString().slice(0, 10),
     benchmark: BENCH,
-    watchlist,
+    watchlist: mockWatchlist,
     portfolios: undefined,
     stocks,
     liveCount,
-    totalCount: watchlist.length,
+    totalCount: mockWatchlist.length,
   };
 }
 
-/* ==== Dashboard (custom watchlist) ==== */
+/** Dashboard for a provided list of tickers (?wl=...). */
 export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
   const wl = (watchlist || []).map((s) => s.trim().toUpperCase()).filter(Boolean);
   if (!wl.length) return getDashboardData();
 
   let benchSeries: number[] = [];
   try {
-    const benchDaily = await getDailySeries(BENCH, DASHBOARD_SIZE);
-    benchSeries = benchDaily.map((r) => r.close);
+    const bench = await getDailySeries(BENCH, DASHBOARD_SIZE);
+    benchSeries = bench.map((r) => r.close);
   } catch {
     benchSeries = [1, 1];
   }
-  const asOf = new Date().toISOString().slice(0, 10);
 
   const entries = await Promise.all(
     wl.map(async (sym) => {
@@ -324,6 +299,7 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
         const row = buildRowFromCloses(resolved.symbol, resolved.symbol, resolved.closes, benchSeries);
         return fillSentiments(resolved.symbol, row);
       }
+
       try {
         const fq = await finnhubQuote(sym);
         return fillSentiments(sym, {
@@ -375,7 +351,7 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
   }
 
   return {
-    asOf,
+    asOf: new Date().toISOString().slice(0, 10),
     benchmark: BENCH,
     watchlist: wl,
     portfolios: undefined,
@@ -385,13 +361,13 @@ export async function getDashboardDataFor(watchlist: string[]): Promise<Data> {
   };
 }
 
-/* ==== Single symbol detail (deep history + overlays) ==== */
+/** Single-stock detail used by /stock/[symbol]. */
 export async function getAnyStockDetail(
   input: string
-): Promise<{ data: Data; row?: StockRow; chart?: ChartPayload }> {
+): Promise<StockDetail> {
   const raw = (input || "").trim();
-  if (!raw) {
-    const empty: Data = {
+  const empty: StockDetail = {
+    data: {
       asOf: new Date().toISOString().slice(0, 10),
       benchmark: BENCH,
       watchlist: [],
@@ -399,11 +375,13 @@ export async function getAnyStockDetail(
       stocks: {},
       liveCount: 0,
       totalCount: 0,
-    };
-    return { data: empty, row: undefined, chart: undefined };
-  }
+    },
+    row: undefined,
+    chart: undefined,
+  };
+  if (!raw) return empty;
 
-  // Benchmark deep
+  // Benchmark deep (SPY) for overlay
   let benchCloses: number[] = [];
   let asOf = new Date().toISOString().slice(0, 10);
   let spySeries: Array<{ date: string; close: number }> | null = null;
@@ -423,36 +401,41 @@ export async function getAnyStockDetail(
     }
   }
 
-  // Main series
+  // Main series (Alpha → Finnhub → search)
   let chosen = raw.toUpperCase();
   let mainSeries: Array<{ date: string; close: number; volume?: number | null }> | null = null;
   try {
-    const r = await fullSeriesWindow(chosen, DETAIL_DAYS);
-    mainSeries = r.series;
+    const s = await getDailySeries(chosen, "full");
+    mainSeries = s.map((r) => ({ date: r.date, close: r.close, volume: null }));
   } catch {
     try {
-      const matches = await finnhubSearchSymbol(raw);
-      const best = matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol || matches[0]?.symbol;
-      if (best) {
-        chosen = best.toUpperCase();
-        const r2 = await fullSeriesWindow(chosen, DETAIL_DAYS);
-        mainSeries = r2.series;
-      }
-    } catch {}
-    if (!mainSeries) {
+      const fh = await finnhubDaily(chosen, DETAIL_DAYS);
+      mainSeries = fh.map((r) => ({ date: r.date, close: r.close, volume: r.volume ?? null }));
+    } catch {
       try {
-        const matches = await searchSymbols(raw);
-        const best = matches?.[0]?.symbol?.toUpperCase();
+        const matches = await finnhubSearchSymbol(raw);
+        const best = matches.find((m) => m.symbol.toUpperCase().endsWith(".ST"))?.symbol || matches[0]?.symbol;
         if (best) {
-          chosen = best;
-          const r3 = await fullSeriesWindow(chosen, DETAIL_DAYS);
-          mainSeries = r3.series;
+          chosen = best.toUpperCase();
+          const fh2 = await finnhubDaily(chosen, DETAIL_DAYS);
+          mainSeries = fh2.map((r) => ({ date: r.date, close: r.close, volume: r.volume ?? null }));
         }
       } catch {}
+      if (!mainSeries) {
+        try {
+          const matches = await searchSymbols(raw);
+          const best = matches?.[0]?.symbol?.toUpperCase();
+          if (best) {
+            chosen = best;
+            const s = await getDailySeries(chosen, "full");
+            mainSeries = s.map((r) => ({ date: r.date, close: r.close, volume: null }));
+          }
+        } catch {}
+      }
     }
   }
 
-  // OMXS30 overlay
+  // OMXS30 overlay (best-effort)
   let omxSeries: Array<{ date: string; close: number }> | null = null;
   try {
     const omx = await finnhubDailyFromCandidates(["^OMXS30", "OMXS30", "OMXS30.ST", "XACT-OMXS30.ST"], DETAIL_DAYS);
@@ -461,7 +444,7 @@ export async function getAnyStockDetail(
     omxSeries = null;
   }
 
-  // Build row
+  // Build row from series or quotes
   let row: StockRow | undefined;
   if (mainSeries && mainSeries.length >= 20) {
     const closes = mainSeries.map((r) => r.close);
@@ -508,15 +491,20 @@ export async function getAnyStockDetail(
     }
   }
 
-  // Chart
+  // Chart payload
   let chart: ChartPayload | undefined;
   if (mainSeries && mainSeries.length) {
-    chart = mergeOverlays(mainSeries, spySeries, omxSeries);
+    chart = mergeOverlays(
+      mainSeries,
+      spySeries,
+      omxSeries
+    );
   }
 
-  // Sentiments
+  // Sentiment (when we have a row)
   if (row) row = await fillSentiments(chosen, row);
 
+  // Wrap in Data shape for consistency with dashboard
   const data: Data = {
     asOf,
     benchmark: BENCH,

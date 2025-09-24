@@ -4,7 +4,7 @@ import SearchBar from "@/components/SearchBar";
 import WatchlistEditor from "@/components/WatchlistEditor";
 
 export default async function Page() {
-  // Default watchlist – you can later make this user-specific or read ?wl=
+  // Default watchlist – change or read from ?wl= later
   const watchlist: string[] = ["AAPL", "MSFT", "GOOGL"];
 
   // Fetch dashboard Data (object with .stocks map)
