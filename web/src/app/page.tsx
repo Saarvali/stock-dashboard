@@ -1,111 +1,43 @@
-// src/lib/data.ts
-import { getNewsSentiment } from "@/lib/news";
-import { getRedditSentiment } from "@/lib/reddit";
-import { getDailySeries, type DailyBar } from "@/lib/finnhub";
-import { rsi, distFromHighPct } from "@/lib/indicators";
+// src/app/page.tsx
+import { getDashboardData, getDashboardDataFor, type StockRow, type Data } from "@/lib/data";
+import DashboardClient from "@/components/DashboardClient";
+import SearchBar from "@/components/SearchBar";
+import WatchlistEditor from "@/components/WatchlistEditor";
 
-export type StockRow = {
-  symbol: string;
-  name: string;
-  price: number;     // last price
-  change: number;    // day change in price (absolute)
-  newsSent: number;  // [-1, 1]
-  redditSent: number;// [-1, 1]
-};
-
-export type StockDetail = {
-  symbol: string;
-  name: string;
-  price: number;
-  change: number;
-  description: string;
-  series: DailyBar[];               // price series for chart
-  rsi14: Array<number>;             // RSI aligned to series (NaN for early points)
-  distFromHighPct: number;          // % from 52w high
-};
-
-// Data is an object with a stocks property (array) to match page.tsx
-export type Data = { stocks: StockRow[] };
-
-// --- Helpers --------------------------------------------------
-
-function fallbackName(symbol: string) {
-  return symbol.toUpperCase().trim();
+// If you later want server-side watchlist (from cookies, db, etc.),
+// you can load it here. For now we default to [] and let the client
+// manage add/remove within DashboardClient/WatchlistEditor.
+async function loadWatchlist(): Promise<string[]> {
+  return [];
 }
 
-async function buildRow(symbol: string, name?: string): Promise<StockRow> {
-  const sym = symbol.toUpperCase().trim();
-  const displayName = name?.trim() || fallbackName(sym);
+export default async function Home() {
+  const watchlist = await loadWatchlist();
 
-  // Use Finnhub series to compute price + change (real rather than random)
-  const series = await getDailySeries(sym, 90);
-  const last = series[series.length - 1];
-  const prev = series[series.length - 2];
+  // Get data (object with { stocks })
+  const data: Data = watchlist.length
+    ? await getDashboardDataFor(watchlist)
+    : await getDashboardData();
 
-  const price = last?.close ?? 0;
-  const change = last && prev ? last.close - prev.close : 0;
+  // Build items for SearchBar/WatchlistEditor as {symbol,name}
+  const items = data.stocks.map((s: StockRow) => ({ symbol: s.symbol, name: s.name }));
 
-  // Sentiment
-  const [newsSent, redditSent] = await Promise.all([
-    getNewsSentiment(sym).catch(() => 0),
-    getRedditSentiment(sym, displayName).catch(() => 0),
-  ]);
+  return (
+    <main className="min-h-screen px-6 py-10 bg-gray-50">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <header className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
+          {/* Optional search & watchlist controls */}
+          <div className="flex items-center gap-4">
+            <SearchBar items={items} />
+            <WatchlistEditor items={items} />
+          </div>
+        </header>
 
-  return {
-    symbol: sym,
-    name: displayName,
-    price,
-    change,
-    newsSent: Number.isFinite(newsSent) ? newsSent : 0,
-    redditSent: Number.isFinite(redditSent) ? redditSent : 0,
-  };
-}
-
-// --- Public API ----------------------------------------------
-
-const DEFAULTS: Array<{ symbol: string; name: string }> = [
-  { symbol: "VOLV-B.ST", name: "Volvo B" },
-  { symbol: "ERIC-B.ST", name: "Ericsson B" },
-  { symbol: "AAPL",      name: "Apple" },
-  { symbol: "TSLA",      name: "Tesla" },
-];
-
-export async function getDashboardData(): Promise<Data> {
-  const rows = await Promise.all(DEFAULTS.map(s => buildRow(s.symbol, s.name)));
-  return { stocks: rows };
-}
-
-export async function getDashboardDataFor(symbols: string[]): Promise<Data> {
-  const rows = await Promise.all(
-    symbols.filter(Boolean).map(sym => buildRow(sym))
+        <section className="rounded-xl border bg-white p-4 shadow-sm">
+          <DashboardClient rows={data.stocks} />
+        </section>
+      </div>
+    </main>
   );
-  return { stocks: rows };
-}
-
-/**
- * Detailed view for /stock/[symbol]: real series + RSI + distFromHighPct.
- */
-export async function getAnyStockDetail(symbol: string): Promise<StockDetail> {
-  const sym = symbol.toUpperCase().trim();
-  const series = await getDailySeries(sym, 365);
-
-  const last = series[series.length - 1];
-  const prev = series[series.length - 2];
-  const price = last?.close ?? 0;
-  const change = last && prev ? last.close - prev.close : 0;
-
-  const closes = series.map(s => s.close);
-  const rsi14 = rsi(closes, 14);
-  const dfh = distFromHighPct(closes, 252);
-
-  return {
-    symbol: sym,
-    name: fallbackName(sym),
-    price,
-    change,
-    description: `Overview for ${sym}.`,
-    series,
-    rsi14,
-    distFromHighPct: dfh,
-  };
 }
