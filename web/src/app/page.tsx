@@ -5,20 +5,23 @@ import SearchBar from "@/components/SearchBar";
 import WatchlistEditor from "@/components/WatchlistEditor";
 
 async function loadWatchlist(): Promise<string[]> {
+  // If you later persist a watchlist in cookies/db, load it here.
   return [];
 }
 
 export default async function Home() {
   const watchlist = await loadWatchlist();
 
-  // Fetch data as { stocks: StockRow[] }
+  // Fetch dashboard data shaped as { stocks: StockRow[] }
   const data: Data = watchlist.length
     ? await getDashboardDataFor(watchlist)
     : await getDashboardData();
 
-  // We no longer pass items into SearchBar/WatchlistEditor
-  // because these components currently take no props.
-  // If we later want to feed options, we’ll update those components’ props.
+  // Build items for SearchBar as { symbol, name }
+  const items: { symbol: string; name: string }[] = data.stocks.map((s: StockRow) => ({
+    symbol: s.symbol,
+    name: s.name,
+  }));
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
@@ -26,7 +29,9 @@ export default async function Home() {
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
           <div className="flex items-center gap-4">
-            <SearchBar />
+            {/* SearchBar REQUIRES items */}
+            <SearchBar items={items} />
+            {/* WatchlistEditor currently takes no props (leave empty) */}
             <WatchlistEditor />
           </div>
         </header>
