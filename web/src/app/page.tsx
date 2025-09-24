@@ -1,40 +1,26 @@
-import { getDashboardData, getDashboardDataFor } from "@/lib/data";
+// src/app/page.tsx
 import DashboardClient from "@/components/DashboardClient";
-import SearchBar from "@/components/SearchBar";
-import WatchlistEditor from "@/components/WatchlistEditor";
+import { getDashboardData, getDashboardDataFor, type StockRow } from "@/lib/data";
 
-type Search = { wl?: string };
+type SearchParams = { wl?: string };
 
-export default async function Home({ searchParams }: { searchParams: Promise<Search> }) {
-  const { wl } = await searchParams;
-  const watchlist = (wl || "")
+export default async function Page({ searchParams }: { searchParams: SearchParams }) {
+  const wlParam = (searchParams?.wl ?? "")
     .split(",")
-    .map((s) => s.trim().toUpperCase())
+    .map((s) => s.trim())
     .filter(Boolean);
 
-  const data = watchlist.length ? await getDashboardDataFor(watchlist) : await getDashboardData();
-
-  const items = Object.values(data.stocks).map((s) => ({ symbol: s.symbol, name: s.name }));
+  const rows: StockRow[] = wlParam.length
+    ? await getDashboardDataFor(wlParam)
+    : await getDashboardData();
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
       <div className="mx-auto max-w-6xl space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="space-y-1">
-            <h1 className="text-3xl font-bold">Stock Dashboard</h1>
-            <p className="text-gray-600">
-              Benchmark: <span className="font-medium">{data.benchmark}</span> • As of {data.asOf}
-            </p>
-          </div>
+        <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
 
-          <div className="w-full sm:w-80">
-            <SearchBar items={items} placeholder="Search AAPL, VOLV-B.ST, ERIC-B…" />
-          </div>
-        </div>
-
-        <WatchlistEditor />
-
-        <DashboardClient data={data} />
+        {/* Dashboard table with Add/Delete that syncs ?wl=... */}
+        <DashboardClient rows={rows} initialWatchlist={wlParam} />
       </div>
     </main>
   );
