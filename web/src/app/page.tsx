@@ -1,17 +1,15 @@
-// src/app/page.tsx
-import DashboardClient from "@/components/DashboardClient";
 import { getDashboardData, getDashboardDataFor, type StockRow } from "@/lib/data";
+import DashboardClient from "@/components/DashboardClient";
+import SearchBar from "@/components/SearchBar";
+import WatchlistEditor from "@/components/WatchlistEditor";
 
-type SearchParams = { wl?: string };
+export default async function Page() {
+  // Default watchlist – you can later make this user-specific
+  const watchlist: string[] = ["AAPL", "MSFT", "GOOGL"];
 
-export default async function Page({ searchParams }: { searchParams: SearchParams }) {
-  const wlParam = (searchParams?.wl ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const rows: StockRow[] = wlParam.length
-    ? await getDashboardDataFor(wlParam)
+  // Fetch rows depending on watchlist
+  const rows: StockRow[] = watchlist.length
+    ? await getDashboardDataFor(watchlist)
     : await getDashboardData();
 
   return (
@@ -19,8 +17,14 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
       <div className="mx-auto max-w-6xl space-y-6">
         <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
 
-        {/* Dashboard table with Add/Delete that syncs ?wl=... */}
-        <DashboardClient rows={rows} initialWatchlist={wlParam} />
+        {/* Optional search & watchlist editor */}
+        <div className="flex items-center gap-4">
+          <SearchBar />
+          <WatchlistEditor />
+        </div>
+
+        {/* Dashboard table & charts */}
+        <DashboardClient rows={rows} initialWatchlist={watchlist} />
       </div>
     </main>
   );
