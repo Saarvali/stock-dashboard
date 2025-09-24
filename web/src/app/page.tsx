@@ -4,9 +4,6 @@ import DashboardClient from "@/components/DashboardClient";
 import SearchBar from "@/components/SearchBar";
 import WatchlistEditor from "@/components/WatchlistEditor";
 
-// If you later want server-side watchlist (from cookies, db, etc.),
-// you can load it here. For now we default to [] and let the client
-// manage add/remove within DashboardClient/WatchlistEditor.
 async function loadWatchlist(): Promise<string[]> {
   return [];
 }
@@ -14,23 +11,23 @@ async function loadWatchlist(): Promise<string[]> {
 export default async function Home() {
   const watchlist = await loadWatchlist();
 
-  // Get data (object with { stocks })
+  // Fetch data as { stocks: StockRow[] }
   const data: Data = watchlist.length
     ? await getDashboardDataFor(watchlist)
     : await getDashboardData();
 
-  // Build items for SearchBar/WatchlistEditor as {symbol,name}
-  const items = data.stocks.map((s: StockRow) => ({ symbol: s.symbol, name: s.name }));
+  // We no longer pass items into SearchBar/WatchlistEditor
+  // because these components currently take no props.
+  // If we later want to feed options, we’ll update those components’ props.
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
       <div className="mx-auto max-w-6xl space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
-          {/* Optional search & watchlist controls */}
           <div className="flex items-center gap-4">
-            <SearchBar items={items} />
-            <WatchlistEditor items={items} />
+            <SearchBar />
+            <WatchlistEditor />
           </div>
         </header>
 
