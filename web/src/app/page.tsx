@@ -19,7 +19,12 @@ export default async function Page() {
 
         {/* Optional search & watchlist editor */}
         <div className="flex items-center gap-4">
-          <SearchBar />
+          <SearchBar
+            items={rows.map((s) => ({
+              symbol: s.symbol,
+              name: s.name,
+            }))}
+          />
           <WatchlistEditor />
         </div>
 
