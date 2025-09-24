@@ -1,38 +1,25 @@
-import { getDashboardData, getDashboardDataFor, type StockRow, type Data } from "@/lib/data";
+// src/app/page.tsx
+import { Suspense } from "react";
 import DashboardClient from "@/components/DashboardClient";
-import SearchBar from "@/components/SearchBar";
-import WatchlistEditor from "@/components/WatchlistEditor";
+import { getDashboardData, type StockRow } from "@/lib/data";
 
-export default async function Page() {
-  // Default watchlist – change or read from ?wl= later
-  const watchlist: string[] = ["AAPL", "MSFT", "GOOGL"];
+export default async function HomePage() {
+  // Fetch your dashboard rows on the server
+  const data = await getDashboardData();
+  const rows: StockRow[] = data.stocks;
 
-  // Fetch dashboard Data (object with .stocks map)
-  const data: Data = watchlist.length
-    ? await getDashboardDataFor(watchlist)
-    : await getDashboardData();
-
-  // Convert map -> array of StockRow for the table and search
-  const rows: StockRow[] = Object.values(data.stocks);
+  // Seed the watchlist from the fetched rows (symbols)
+  const initialWatchlist = rows.map((r) => r.symbol);
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
+      <div className="mx-auto max-w-5xl">
+        <h1 className="mb-4 text-2xl font-semibold">Dashboard</h1>
 
-        {/* Optional search & watchlist editor */}
-        <div className="flex items-center gap-4">
-          <SearchBar
-            items={rows.map((s) => ({
-              symbol: s.symbol,
-              name: s.name,
-            }))}
-          />
-          <WatchlistEditor />
-        </div>
-
-        {/* Dashboard table */}
-        <DashboardClient rows={rows} initialWatchlist={watchlist} />
+        {/* IMPORTANT: Wrap the client component (uses useSearchParams) in Suspense */}
+        <Suspense fallback={<div className="text-gray-500">Loading…</div>}>
+          <DashboardClient rows={rows} initialWatchlist={initialWatchlist} />
+        </Suspense>
       </div>
     </main>
   );
