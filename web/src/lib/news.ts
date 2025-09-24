@@ -1,47 +1,50 @@
 // src/lib/news.ts
-import { averageSentiment } from "@/lib/sentiment";
+import { scoreTitleAndSummary } from "@/lib/sentiment";
 
 const API = "https://finnhub.io/api/v1";
 const KEY = process.env.FINNHUB_API_KEY!;
 
-type FinnhubNewsItem = {
-  category?: string;
-  datetime?: number; // unix seconds
-  headline?: string;
-  summary?: string;
-  id?: number;
-  image?: string;
-  related?: string;
-  source?: string;
-  url?: string;
-};
-
-async function getJSON<T>(url: string, revalidate = 3600): Promise<T> {
-  const res = await fetch(url, { next: { revalidate } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as T;
-}
-
-/** Returns sentiment in [-1..+1]; 0 if nothing to score. */
+/**
+ * Returns a sentiment in [-1, 1] for recent company news.
+ * Uses Finnhub /company-news and our lexicon scoring.
+ */
 export async function getNewsSentiment(symbol: string): Promise<number> {
-  if (!KEY) return 0;
-
-  // last 30 days window
-  const to = new Date();
-  const from = new Date(to.getTime() - 30 * 86400 * 1000);
-  const toStr = to.toISOString().slice(0, 10);
-  const fromStr = from.toISOString().slice(0, 10);
-
-  const url = `${API}/company-news?symbol=${encodeURIComponent(symbol)}&from=${fromStr}&to=${toStr}&token=${KEY}`;
   try {
-    const items = await getJSON<FinnhubNewsItem[]>(url, 1800);
-    const texts = (items || [])
-      .flatMap((x) => [x.headline, x.summary])
-      .map((t) => String(t || "").trim())
-      .filter((t) => t.length > 0);
-    if (!texts.length) return 0;
-    return averageSentiment(texts.slice(0, 80)); // cap for speed
+    const sym = (symbol || "").toUpperCase();
+    if (!sym || !KEY) return 0;
+
+    // last 14 days
+    const to = new Date();
+    const from = new Date();
+    from.setDate(to.getDate() - 14);
+
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const url = `${API}/company-news?symbol=${encodeURIComponent(sym)}&from=${fmt(from)}&to=${fmt(to)}&token=${encodeURIComponent(
+      KEY
+    )}`;
+
+    const res = await fetch(url, { next: { revalidate: 60 * 30 } }); // cache 30m
+    if (!res.ok) return 0;
+
+    const items: Array<{ headline?: string; summary?: string; datetime?: number }> = await res.json();
+
+    if (!Array.isArray(items) || items.length === 0) return 0;
+
+    // score each headline+summary; take robust trimmed mean
+    const scores = items
+      .slice(0, 50) // cap work
+      .map((n) => scoreTitleAndSummary(n.headline ?? "", n.summary ?? ""));
+
+    if (!scores.length) return 0;
+
+    // trimmed mean (drop extremes) to reduce outliers
+    scores.sort((a, b) => a - b);
+    const trim = Math.max(0, Math.floor(scores.length * 0.1));
+    const trimmed = scores.slice(trim, scores.length - trim);
+    const avg = trimmed.reduce((s, x) => s + x, 0) / (trimmed.length || 1);
+
+    return Math.max(-1, Math.min(1, avg));
   } catch {
-    return 0; // neutral on failure
+    return 0;
   }
 }
