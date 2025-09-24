@@ -1,35 +1,48 @@
 // src/lib/indicators.ts
-export function sma(values: number[], window: number) {
-  if (values.length < window) return NaN;
-  let sum = 0;
-  for (let i = values.length - window; i < values.length; i++) sum += values[i];
-  return sum / window;
-}
 
-export function rsi(values: number[], period = 14) {
-  if (values.length < period + 1) return NaN;
-  let gains = 0, losses = 0;
-  for (let i = values.length - period + 1; i < values.length; i++) {
-    const diff = values[i] - values[i - 1];
-    if (diff >= 0) gains += diff; else losses -= diff;
+/**
+ * RSI(14) by Wilder's smoothing.
+ * Input: closes (ascending). Output: array aligned to closes (leading values are NaN until period).
+ */
+export function rsi(closes: number[], period = 14): number[] {
+  const n = closes.length;
+  const out = new Array<number>(n).fill(NaN);
+  if (n < period + 1) return out;
+
+  let gain = 0;
+  let loss = 0;
+
+  // seed averages over first `period`
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gain += diff;
+    else loss -= diff;
   }
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+
+  // first RSI value
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+
+  // Wilder smoothing
+  for (let i = period + 1; i < n; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const g = diff > 0 ? diff : 0;
+    const l = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
 }
 
-export function pct(from: number, to: number) {
-  if (!from) return 0;
-  return ((to - from) / from) * 100;
-}
-
-/** % distance from the highest close in the given window (negative when below the high). */
-export function distFromHighPct(values: number[], window = 252) {
-  const slice = values.slice(-window);
-  if (slice.length === 0) return NaN;
-  const high = Math.max(...slice);           // ← important: spread operator
-  const last = slice[slice.length - 1];
-  return pct(high, last);                    // negative if below high
+/** % below 52-week high (or last N closes). Negative = below high, 0 = at high. */
+export function distFromHighPct(closes: number[], lookback = 252): number {
+  if (!closes.length) return 0;
+  const start = Math.max(0, closes.length - lookback);
+  const window = closes.slice(start);
+  const high = Math.max(...window);
+  const last = closes[closes.length - 1];
+  if (high <= 0) return 0;
+  return ((last - high) / high) * 100; // e.g. -12.3 means 12.3% below high
 }

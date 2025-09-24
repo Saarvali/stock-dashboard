@@ -1,89 +1,54 @@
+// src/components/PriceChart.tsx
 "use client";
 
-import { useMemo, useState } from "react";
-import {
-  ResponsiveContainer,
-  ComposedChart,
-  Line,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Legend,
-  Tooltip,
-} from "recharts";
+import * as React from "react";
 
-type Point = { date: string; stock: number; spy?: number | null; omx?: number | null; volume?: number | null };
+type Point = { date: string; close: number };
 
-const RANGES = [
-  { key: "1M", days: 21 },
-  { key: "3M", days: 63 },
-  { key: "6M", days: 126 },
-  { key: "1Y", days: 252 },
-  { key: "5Y", days: 1260 },
-  { key: "MAX", days: Number.POSITIVE_INFINITY },
-] as const;
+type Props = {
+  data: Point[];
+  height?: number;
+};
 
-export default function PriceChart({ data, note = "Indexed to 100 at period start" }: { data: Point[]; note?: string }) {
-  const [range, setRange] = useState<(typeof RANGES)[number]["key"]>("6M");
+export default function PriceChart({ data, height = 180 }: Props) {
+  if (!data?.length) {
+    return <div className="text-sm text-gray-500">No data</div>;
+  }
 
-  const sliced = useMemo(() => {
-    if (!data?.length) return [];
-    const days = RANGES.find((r) => r.key === range)?.days ?? Number.POSITIVE_INFINITY;
-    const start = Math.max(0, data.length - (Number.isFinite(days) ? days : data.length));
+  const width = 640; // fixed for simplicity
+  const padding = 24;
 
-    const scaleFrom = (arr: Point[], key: "stock" | "spy" | "omx") => {
-      const baseVal = arr[start]?.[key];
-      return (v?: number | null) => (v && baseVal ? (v * (100 / baseVal)) : null);
-    };
-    const scaleStock = scaleFrom(data, "stock");
-    const scaleSpy = scaleFrom(data, "spy");
-    const scaleOmx = scaleFrom(data, "omx");
+  const xs = data.map((_, i) => i);
+  const ys = data.map(d => d.close);
 
-    return data.slice(start).map((p) => ({
-      date: p.date,
-      stock: scaleStock(p.stock) ?? 0,
-      spy: scaleSpy(p.spy),
-      omx: scaleOmx(p.omx),
-      volume: p.volume ?? null,
-    }));
-  }, [data, range]);
+  const xMin = 0;
+  const xMax = xs.length - 1;
+  const yMin = Math.min(...ys);
+  const yMax = Math.max(...ys);
 
-  if (!data?.length) return null;
+  const scaleX = (i: number) =>
+    padding + ((i - xMin) / Math.max(1, xMax - xMin)) * (width - padding * 2);
+  const scaleY = (y: number) =>
+    height - padding - ((y - yMin) / Math.max(1e-9, yMax - yMin)) * (height - padding * 2);
+
+  const path = data
+    .map((d, i) => `${i === 0 ? "M" : "L"} ${scaleX(i).toFixed(1)} ${scaleY(d.close).toFixed(1)}`)
+    .join(" ");
+
+  const last = data[data.length - 1]?.close ?? 0;
+  const first = data[0]?.close ?? 0;
+  const pct = first ? ((last - first) / first) * 100 : 0;
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-4">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-sm text-gray-600">{note}</div>
-        <div className="flex gap-1">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              onClick={() => setRange(r.key)}
-              className={`text-xs px-2 py-1 rounded ${range === r.key ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700"}`}
-            >
-              {r.key}
-            </button>
-          ))}
-        </div>
-      </div>
+    <div className="w-full">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
+        {/* Axes (very light) */}
+        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#e5e7eb" />
+        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#e5e7eb" />
 
-      <div style={{ width: "100%", height: 360 }}>
-        <ResponsiveContainer>
-          <ComposedChart data={sliced}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="date" minTickGap={28} />
-            <YAxis yAxisId="y1" />
-            <YAxis yAxisId="y2" orientation="right" hide />
-            <Tooltip />
-            <Legend />
-            <Bar yAxisId="y2" dataKey="volume" name="Volume" opacity={0.3} />
-            <Line yAxisId="y1" type="monotone" dataKey="stock" name="Stock (idx)" dot={false} />
-            <Line yAxisId="y1" type="monotone" dataKey="spy" name="S&P 500 / SPY (idx)" dot={false} />
-            <Line yAxisId="y1" type="monotone" dataKey="omx" name="OMXS30 (idx)" dot={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+        {/* Price path */}
+        <path d={path} fill="none" stroke={pct >= 0 ? "#16a34a" : "#dc2626"} strokeWidth={2} />
+      </svg>
     </div>
   );
 }

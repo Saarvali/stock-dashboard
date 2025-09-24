@@ -1,33 +1,19 @@
 // src/app/stock/[symbol]/page.tsx
 import Link from "next/link";
-import PriceChart from "@/components/PriceChart";
 import { getAnyStockDetail, type StockDetail } from "@/lib/data";
-
-// If you already have a function that returns price history points,
-// import it here. If not, this stub returns an empty array so the page still builds.
-type Point = { date: string; stock: number; spy?: number | null; omx?: number | null; volume?: number | null };
-
-// ⬇️ Try to import your real history fetcher from lib/data.
-// If you don't have one yet, keep the fallback implementation below.
-// import { getPriceHistory } from "@/lib/data";
-
-async function getPriceHistory(_symbol: string): Promise<Point[]> {
-  // Fallback so the page compiles; replace with your real implementation.
-  return [];
-}
+import PriceChart from "@/components/PriceChart";
 
 function fmtPct(x: number, d = 2) {
   const sign = x > 0 ? "+" : "";
   return `${sign}${x.toFixed(d)}%`;
 }
-
 function fmtMoney(x: number, d = 2) {
   return x.toFixed(d);
 }
 
 export default async function StockPage({ params }: { params: { symbol: string } }) {
   const key = decodeURIComponent(params.symbol);
-  const stock: StockDetail | null = await getAnyStockDetail(key);
+  const stock: StockDetail = await getAnyStockDetail(key);
 
   if (!stock) {
     return (
@@ -48,13 +34,11 @@ export default async function StockPage({ params }: { params: { symbol: string }
   }
 
   const pct = stock.price !== 0 ? (stock.change / stock.price) * 100 : 0;
-
-  // 🔹 Load price history to render the chart (empty = chart hidden)
-  const history = await getPriceHistory(stock.symbol);
+  const rsiLatest = Number.isFinite(stock.rsi14.at(-1)!) ? (stock.rsi14.at(-1) as number) : NaN;
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <Link href="/" className="inline-block text-sm text-blue-600 hover:underline">
           ← Back to dashboard
         </Link>
@@ -73,16 +57,31 @@ export default async function StockPage({ params }: { params: { symbol: string }
             </div>
           </div>
 
-          <p className="mt-4 text-gray-700 leading-relaxed">{stock.description}</p>
-        </section>
+          <div className="mt-2 text-sm text-gray-600">{stock.description}</div>
 
-        {/* 🔹 Price history chart (shows only if you return data) */}
-        {history.length > 0 && (
-          <section className="mt-6 rounded-xl border bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-medium">Price history</h2>
-            <PriceChart data={history} />
-          </section>
-        )}
+          <div className="mt-6">
+            <PriceChart data={stock.series} />
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-lg border p-4">
+              <div className="text-xs uppercase text-gray-500">RSI(14)</div>
+              <div className="mt-1 text-xl font-semibold">
+                {Number.isFinite(rsiLatest) ? rsiLatest.toFixed(1) : "—"}
+              </div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-xs uppercase text-gray-500">% from 52w High</div>
+              <div className={"mt-1 text-xl font-semibold " + (stock.distFromHighPct < 0 ? "text-red-600" : "text-gray-900")}>
+                {fmtPct(stock.distFromHighPct, 1)}
+              </div>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="text-xs uppercase text-gray-500">Series length</div>
+              <div className="mt-1 text-xl font-semibold">{stock.series.length} days</div>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   );
