@@ -1,63 +1,117 @@
 // src/lib/sentiment.ts
 
-// Expanded bilingual(ish) lexicon: English + a few Swedish finance words.
-// Weights: roughly -3..+3; keep it simple & transparent.
+// Lightweight lexicon-based sentiment (news/reddit).
+// Keep keys UNIQUE (TS error if duplicated).
 const LEXICON: Record<string, number> = {
-  // positive (EN)
-  beat: 2, beats: 2, top: 2, tops: 2, exceed: 2, exceeds: 2,
-  raise: 2, raises: 2, hike: 2, hikes: 2, boost: 2, boosts: 2,
-  rally: 2, rallies: 2, surge: 2, surges: 2, jump: 2, jumps: 2, spike: 2, spikes: 2,
-  soar: 3, soars: 3, record: 2, "record-high": 2, breakout: 2,
-  strong: 2, bullish: 2, upgrade: 1, upgraded: 1, outperform: 2, buy: 1, "buy-rating": 1,
-  profit: 1, profits: 1, profitable: 1, growth: 1, guidance: 1, "raises-guidance": 2,
-  // negative (EN)
-  miss: -2, misses: -2, below: -1, disappoint: -2, disappointed: -2,
-  cut: -2, cuts: -2, slash: -2, slashes: -2, reduce: -1, reduces: -1,
-  fall: -2, falls: -2, sink: -2, sinks: -2, drop: -2, drops: -2,
-  slump: -2, slumps: -2, plunge: -3, plunges: -3, plummet: -3, plummets: -3,
-  weak: -2, bearish: -2, downgrade: -2, downgraded: -2, underperform: -2, selloff: -2,
-  loss: -1, losses: -1, warning: -2, "profit-warning": -3, lawsuit: -2, probe: -2, recall: -2, investigation: -2, fine: -2,
-  bankrupt: -3, bankruptcy: -3, fraud: -3,
-  // earnings-y words (neutral-ish but slightly directional)
-  beats: 2, "beats-estimates": 2, "misses-estimates": -2, eps: 0.5, revenue: 0.3, outlook: 0.3, forecast: 0.3,
+  // bullish / positive
+  "upgrade": 2,
+  "upgrades": 2,
+  "raised": 2,
+  "raise": 1.5,
+  "beat": 2,
+  "beats": 2,
+  "record": 2,
+  "surge": 2,
+  "surges": 2,
+  "rally": 2,
+  "rallies": 2,
+  "soar": 2.5,
+  "soars": 2.5,
+  "jump": 1.5,
+  "jumps": 1.5,
+  "gain": 1.5,
+  "gains": 1.5,
+  "buy": 2,
+  "overweight": 1.5,
+  "outperform": 2,
+  "bullish": 2,
 
-  // Swedish (very small, but helps .ST names)
-  höjer: 2, "höjt": 2, "rekord": 2, "stiger": 2, "upp": 1, "uppgång": 2, "köp": 1, "uppgradera": 1, "uppgraderar": 1,
-  sänker: -2, "sjunker": -2, "rasar": -3, "dyker": -3, "vinstvarning": -3, "förlust": -2, "nedgradera": -2, "nedgraderar": -2, "sälj": -1, "svag": -2
+  // earnings-oriented (slightly directional)
+  "beats-estimates": 2,
+  "misses-estimates": -2,
+  "eps": 0.5,
+  "revenue": 0.3,
+  "outlook": 0.3,
+  "forecast": 0.3,
+  "guidance": 0.3,
+
+  // bearish / negative
+  "downgrade": -2,
+  "downgrades": -2,
+  "cut": -1.5,
+  "cuts": -1.5,
+  "miss": -2,
+  "misses": -2,
+  "fall": -1.5,
+  "falls": -1.5,
+  "drop": -1.5,
+  "drops": -1.5,
+  "slump": -2,
+  "slumps": -2,
+  "plunge": -2.5,
+  "plunges": -2.5,
+  "bearish": -2,
+  "fraud": -3,
+  "bankrupt": -3,
+  "bankruptcy": -3,
+  "probe": -2,
+  "investigation": -2,
+
+  // Swedish (helps .ST names a bit)
+  "höjer": 2,
+  "höjt": 2,
+  "rekord": 2,
+  "stiger": 2,
+  "upp": 1,
+  "uppgång": 2,
+  "köp": 1,
+  "uppgradera": 1,
+  "uppgraderar": 1,
+  "sänker": -2,
+  "rasar": -2.5,
+  "faller": -1.5,
+  "varning": -1.5,
 };
 
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9åäöÅÄÖ\s\-\.]/g, " ")  // keep simple diacritics
+    // keep letters, digits, dashes (for matches like "beats-estimates")
+    .replace(/[^\p{L}\p{N}\- ]+/gu, " ")
     .split(/\s+/)
     .filter(Boolean);
 }
 
-/** Score one text in [-1..+1]; 0 if no lexicon hits */
-export function scoreText(text: string): number {
-  const words = tokenize(text);
-  let sum = 0;
-  let hits = 0;
-  for (const w of words) {
-    if (w in LEXICON) {
-      sum += LEXICON[w];
-      hits++;
-    }
-    // tiny phrase helpers
-    if (w === "record" && words.includes("high")) { sum += 2; hits++; }
-    if ((w === "miss" || w === "misses") && words.includes("estimates")) { sum += -2; hits++; }
-    if ((w === "beat" || w === "beats") && words.includes("estimates")) { sum += 2; hits++; }
-  }
-  if (!hits) return 0;
-  const normalized = Math.max(-1, Math.min(1, sum / (hits * 3)));
-  return normalized;
+function clamp(x: number, min = -1, max = 1) {
+  return Math.max(min, Math.min(max, x));
 }
 
-/** Average a bunch of texts; returns 0 if empty */
-export function averageSentiment(texts: string[]): number {
-  if (!texts.length) return 0;
-  const scores = texts.map(scoreText);
-  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-  return Math.max(-1, Math.min(1, Math.round(avg * 100) / 100));
+/**
+ * Score a single text: returns a number in [-1, 1].
+ * Simple bag-of-words over the lexicon with log damping.
+ */
+export function scoreText(text: string | undefined | null): number {
+  if (!text) return 0;
+  const toks = tokenize(text);
+  if (!toks.length) return 0;
+
+  let sum = 0;
+  for (const t of toks) {
+    const w = LEXICON[t];
+    if (w) sum += w;
+  }
+
+  // Normalize by length with mild damping to avoid long articles dominating
+  const norm = sum / Math.max(5, Math.log2(8 + toks.length));
+  return clamp(norm / 5); // scale into roughly [-1, 1]
+}
+
+/**
+ * Combine title + summary safely to a single score in [-1, 1].
+ */
+export function scoreTitleAndSummary(title?: string, summary?: string): number {
+  const s1 = scoreText(title);
+  const s2 = scoreText(summary);
+  // Weighted: title matters a bit more
+  return clamp(0.6 * s1 + 0.4 * s2);
 }
