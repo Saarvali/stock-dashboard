@@ -1,53 +1,112 @@
 // src/components/PriceChart.tsx
+// Minimal, dependency-free SVG line chart for { t, c } series.
+
 "use client";
 
 import * as React from "react";
 
-type Point = { date: string; close: number };
+export type Series = { t: number[]; c: number[] };
+type Props = { series: Series; height?: number };
 
-type Props = {
-  data: Point[];
-  height?: number;
-};
+export default function PriceChart({ series, height = 260 }: Props) {
+  const { t, c } = series || { t: [], c: [] };
 
-export default function PriceChart({ data, height = 180 }: Props) {
-  if (!data?.length) {
-    return <div className="text-sm text-gray-500">No data</div>;
+  if (!Array.isArray(t) || !Array.isArray(c) || c.length < 2) {
+    return (
+      <div className="text-sm text-gray-500">
+        Not enough data to render chart.
+      </div>
+    );
   }
 
-  const width = 640; // fixed for simplicity
-  const padding = 24;
+  // Dimensions & padding
+  const W = 800; // container width (SVG viewBox; scales to parent)
+  const H = height;
+  const PAD_L = 40;
+  const PAD_R = 12;
+  const PAD_T = 12;
+  const PAD_B = 24;
 
-  const xs = data.map((_, i) => i);
-  const ys = data.map(d => d.close);
+  const n = Math.min(t.length, c.length);
+  const xs = t.slice(-n);
+  const ys = c.slice(-n);
 
-  const xMin = 0;
-  const xMax = xs.length - 1;
-  const yMin = Math.min(...ys);
-  const yMax = Math.max(...ys);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const yRange = maxY - minY || 1;
 
-  const scaleX = (i: number) =>
-    padding + ((i - xMin) / Math.max(1, xMax - xMin)) * (width - padding * 2);
-  const scaleY = (y: number) =>
-    height - padding - ((y - yMin) / Math.max(1e-9, yMax - yMin)) * (height - padding * 2);
+  // X goes 0..(n-1)
+  const xToPx = (i: number) =>
+    PAD_L + (i / (n - 1)) * (W - PAD_L - PAD_R);
+  const yToPx = (y: number) =>
+    PAD_T + (1 - (y - minY) / yRange) * (H - PAD_T - PAD_B);
 
-  const path = data
-    .map((d, i) => `${i === 0 ? "M" : "L"} ${scaleX(i).toFixed(1)} ${scaleY(d.close).toFixed(1)}`)
-    .join(" ");
+  // Build path
+  let d = "";
+  for (let i = 0; i < n; i++) {
+    const x = xToPx(i);
+    const y = yToPx(ys[i]);
+    d += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
+  }
 
-  const last = data[data.length - 1]?.close ?? 0;
-  const first = data[0]?.close ?? 0;
-  const pct = first ? ((last - first) / first) * 100 : 0;
+  // Last price marker
+  const lastX = xToPx(n - 1);
+  const lastY = yToPx(ys[n - 1]);
 
   return (
-    <div className="w-full">
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
-        {/* Axes (very light) */}
-        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#e5e7eb" />
-        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#e5e7eb" />
+    <div className="w-full overflow-hidden">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
+        {/* Background */}
+        <rect x="0" y="0" width={W} height={H} fill="white" />
+
+        {/* Horizontal grid (4 lines) */}
+        {Array.from({ length: 4 }).map((_, i) => {
+          const yVal = minY + (i / 3) * yRange;
+          const y = yToPx(yVal);
+          return (
+            <g key={i}>
+              <line
+                x1={PAD_L}
+                x2={W - PAD_R}
+                y1={y}
+                y2={y}
+                stroke="#e5e7eb"
+                strokeWidth={1}
+              />
+              <text
+                x={8}
+                y={y + 4}
+                fontSize="10"
+                fill="#6b7280"
+              >
+                {yVal.toFixed(2)}
+              </text>
+            </g>
+          );
+        })}
 
         {/* Price path */}
-        <path d={path} fill="none" stroke={pct >= 0 ? "#16a34a" : "#dc2626"} strokeWidth={2} />
+        <path
+          d={d}
+          fill="none"
+          stroke="#2563eb"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+
+        {/* Last value dot */}
+        <circle cx={lastX} cy={lastY} r={3} fill="#2563eb" />
+
+        {/* Axes (simple baseline) */}
+        <line
+          x1={PAD_L}
+          x2={W - PAD_R}
+          y1={H - PAD_B}
+          y2={H - PAD_B}
+          stroke="#9ca3af"
+          strokeWidth={1}
+        />
       </svg>
     </div>
   );
