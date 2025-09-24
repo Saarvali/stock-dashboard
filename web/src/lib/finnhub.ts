@@ -39,3 +39,59 @@ export async function getDailySeries(symbol: string, daysBack = 365): Promise<Da
   bars.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return bars;
 }
+
+// --- Symbol search -----------------------------------------------------------
+export type SymbolHit = {
+  symbol: string;
+  name: string;
+  exchange?: string;
+  currency?: string;
+};
+
+type FinnhubSearchItem = {
+  symbol?: string;
+  description?: string;
+  displaySymbol?: string;
+  type?: string;
+};
+
+type FinnhubSearchResponse = {
+  count?: number;
+  result?: FinnhubSearchItem[];
+};
+
+/**
+ * Search symbols via Finnhub's /search endpoint.
+ * Returns normalized results.
+ */
+export async function finnhubSearchSymbol(query: string, limit = 10): Promise<SymbolHit[]> {
+  const q = (query || "").trim();
+  if (!q || !KEY) return [];
+
+  const url = `${FINNHUB}/search?q=${encodeURIComponent(q)}&token=${encodeURIComponent(KEY)}`;
+  const res = await fetch(url, { next: { revalidate: 60 * 60 } }); // 1h cache ok for symbol search
+  if (!res.ok) return [];
+
+  const data: FinnhubSearchResponse = await res.json();
+  const arr = Array.isArray(data?.result) ? data!.result! : [];
+
+  const hits: SymbolHit[] = [];
+  for (const r of arr) {
+    const sym = (r.symbol ?? r.displaySymbol ?? "").trim();
+    const name = (r.description ?? "").trim();
+    if (!sym) continue;
+
+    hits.push({
+      symbol: sym,
+      name: name || sym,
+      // Finnhub /search doesn’t include exchange/currency reliably
+      exchange: undefined,
+      currency: undefined,
+    });
+
+    if (hits.length >= limit) break;
+  }
+
+  return hits;
+}
+

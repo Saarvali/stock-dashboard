@@ -1,79 +1,49 @@
 // src/app/api/symbols/route.ts
 import { NextRequest } from "next/server";
-import { finnhubSearchSymbol } from "@/lib/finnhub";
+import { finnhubSearchSymbol, type SymbolHit } from "@/lib/finnhub";
 import { searchSymbols as alphaSearchSymbols } from "@/lib/alpha";
 
 export const dynamic = "force-dynamic";
 
-type Out = { symbol: string; name: string };
+type AlphaHit = {
+  symbol: string;
+  name: string;
+  exchange?: string;
+  currency?: string;
+};
 
-type FinnhubItem = { symbol?: unknown; description?: unknown };
-type AlphaItem = { symbol?: unknown; name?: unknown };
-
-function isString(v: unknown): v is string {
-  return typeof v === "string";
+function dedupeMerge(a: SymbolHit[], b: SymbolHit[], max = 12): SymbolHit[] {
+  const map = new Map<string, SymbolHit>();
+  const upsert = (x: SymbolHit) => {
+    const k = x.symbol.toUpperCase();
+    if (!map.has(k)) map.set(k, x);
+  };
+  a.forEach(upsert);
+  b.forEach(upsert);
+  return Array.from(map.values()).slice(0, max);
 }
 
+/**
+ * GET /api/symbols?q=TES
+ * Returns: { items: Array<{symbol,name,exchange?,currency?}> }
+ */
 export async function GET(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const q = (searchParams.get("q") || "").trim();
-    if (!q) {
-      return new Response(JSON.stringify([] satisfies Out[]), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }
+  const { searchParams } = new URL(req.url);
+  const q = (searchParams.get("q") ?? "").trim();
 
-    const [fh, av] = await Promise.allSettled([
-      finnhubSearchSymbol(q),
-      alphaSearchSymbols(q),
+  if (!q) {
+    return Response.json({ items: [] }, { status: 200 });
+  }
+
+  try {
+    const [fh, av] = await Promise.all([
+      finnhubSearchSymbol(q, 10).catch(() => [] as SymbolHit[]),
+      alphaSearchSymbols(q, 10).catch(() => [] as AlphaHit[]),
     ]);
 
-    const items: Out[] = [];
-
-    if (fh.status === "fulfilled" && Array.isArray(fh.value)) {
-      for (const it of fh.value as FinnhubItem[]) {
-        const rawSym = isString(it.symbol) ? it.symbol : "";
-        if (!rawSym) continue;
-        const s = rawSym.toUpperCase();
-        const n = isString(it.description) && it.description ? it.description : s;
-        items.push({ symbol: s, name: n });
-      }
-    }
-
-    if (av.status === "fulfilled" && Array.isArray(av.value)) {
-      for (const it of av.value as AlphaItem[]) {
-        const rawSym = isString(it.symbol) ? it.symbol : "";
-        if (!rawSym) continue;
-        const s = rawSym.toUpperCase();
-        const n = isString(it.name) && it.name ? it.name : s;
-        items.push({ symbol: s, name: n });
-      }
-    }
-
-    // Dedupe by symbol, keep first occurrence
-    const seen = new Set<string>();
-    const merged: Out[] = [];
-    for (const x of items) {
-      if (seen.has(x.symbol)) continue;
-      seen.add(x.symbol);
-      merged.push(x);
-    }
-
-    const out = merged.slice(0, 20);
-
-    return new Response(JSON.stringify(out), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-        "cache-control": "public, max-age=600",
-      },
-    });
+    const merged = dedupeMerge(fh, av as SymbolHit[], 12);
+    return Response.json({ items: merged }, { status: 200 });
   } catch {
-    return new Response(JSON.stringify([] satisfies Out[]), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return Response.json({ items: [] }, { status: 200 });
   }
 }
