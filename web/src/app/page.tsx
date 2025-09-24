@@ -5,7 +5,7 @@ import SearchBar from "@/components/SearchBar";
 import WatchlistEditor from "@/components/WatchlistEditor";
 
 async function loadWatchlist(): Promise<string[]> {
-  // If you later persist a watchlist in cookies/db, load it here.
+  // TODO: load from cookies/DB later. For now empty means "default list" in lib/data.
   return [];
 }
 
@@ -29,15 +29,14 @@ export default async function Home() {
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Stock Dashboard</h1>
           <div className="flex items-center gap-4">
-            {/* SearchBar REQUIRES items */}
             <SearchBar items={items} />
-            {/* WatchlistEditor currently takes no props (leave empty) */}
             <WatchlistEditor />
           </div>
         </header>
 
         <section className="rounded-xl border bg-white p-4 shadow-sm">
-          <DashboardClient rows={data.stocks} />
+          {/* FIX: pass the required initialWatchlist prop */}
+          <DashboardClient rows={data.stocks} initialWatchlist={watchlist} />
         </section>
       </div>
     </main>
