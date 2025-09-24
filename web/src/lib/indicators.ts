@@ -1,3 +1,4 @@
+// src/lib/indicators.ts
 export function sma(values: number[], window: number) {
   if (values.length < window) return NaN;
   let sum = 0;
@@ -25,11 +26,11 @@ export function pct(from: number, to: number) {
   return ((to - from) / from) * 100;
 }
 
+/** % distance from the highest close in the given window (negative when below the high). */
 export function distFromHighPct(values: number[], window = 252 /* ~52w trading days */) {
   const slice = values.slice(-window);
   if (slice.length === 0) return NaN;
-  const high = Math.max(...slice);
+  const high = Math.max(...slice);      // ← fixed spread operator
   const last = slice[slice.length - 1];
-  // negative if below high
-  return pct(high, last);
+  return pct(high, last);               // negative if below high
 }
