@@ -12,9 +12,11 @@ function fmtPct(x: number, d = 2) {
 }
 
 function chip(p: number) {
-  return p > 0.1 ? "text-green-600 bg-green-50"
-       : p < -0.1 ? "text-red-600 bg-red-50"
-       : "text-gray-600 bg-gray-50";
+  return p > 0.1
+    ? "text-green-600 bg-green-50"
+    : p < -0.1
+    ? "text-red-600 bg-red-50"
+    : "text-gray-600 bg-gray-50";
 }
 
 export default function DashboardClient({
@@ -38,7 +40,9 @@ export default function DashboardClient({
       .filter(Boolean);
     return wlParam.length
       ? wlParam
-      : (initialWatchlist.length ? initialWatchlist : rows.map((r) => r.symbol.toUpperCase()));
+      : initialWatchlist.length
+      ? initialWatchlist
+      : rows.map((r) => r.symbol.toUpperCase());
   }, [sp, initialWatchlist, rows]);
 
   // Persist WL locally
@@ -124,43 +128,53 @@ export default function DashboardClient({
           <thead className="bg-gray-50">
             <tr>
               <th className="px-3 py-3 text-left font-semibold text-gray-700">#</th>
-              <th className="px-3 py-3 text-left font-semibold text-gray-700">Ticker</th>
+              <th className="px-3 py-3 text-left font-semibold text-gray-700">
+                Ticker
+              </th>
               <th className="px-3 py-3 font-semibold text-gray-700">Price</th>
               <th className="px-3 py-3 font-semibold text-gray-700">Δ Day</th>
               <th className="px-3 py-3 font-semibold text-gray-700">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r, i) => (
-              <tr key={r.symbol} className={i % 2 ? "bg-gray-50" : ""}>
-                <td className="px-3 py-3 text-gray-500">{i + 1}</td>
-                <td className="px-3 py-3 font-medium">
-                  <Link
-                    href={`/stock/${encodeURIComponent(r.symbol)}`}
-                    className="underline hover:no-underline"
-                  >
-                    {r.symbol}
-                  </Link>
-                  <div className="text-xs text-gray-500">{r.name}</div>
-                </td>
-                <td className="px-3 py-3">{r.last.toFixed(2)}</td>
-                <td className={`px-3 py-3 font-medium ${chip(r.changePct)}`}>
-                  {fmtPct(r.changePct, 2)}
-                </td>
-                <td className="px-3 py-3">
-                  <button
-                    onClick={() => deleteSymbol(r.symbol)}
-                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-gray-700 hover:bg-gray-100"
-                    title={`Remove ${r.symbol}`}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {filtered.map((r, i) => {
+              // Convert absolute change to percent change using the price
+              const pct = r.price !== 0 ? (r.change / r.price) * 100 : 0;
+
+              return (
+                <tr key={r.symbol} className={i % 2 ? "bg-gray-50" : ""}>
+                  <td className="px-3 py-3 text-gray-500">{i + 1}</td>
+                  <td className="px-3 py-3 font-medium">
+                    <Link
+                      href={`/stock/${encodeURIComponent(r.symbol)}`}
+                      className="underline hover:no-underline"
+                    >
+                      {r.symbol}
+                    </Link>
+                    <div className="text-xs text-gray-500">{r.name}</div>
+                  </td>
+                  <td className="px-3 py-3">{r.price.toFixed(2)}</td>
+                  <td className={`px-3 py-3 font-medium ${chip(pct)}`}>
+                    {fmtPct(pct, 2)}
+                  </td>
+                  <td className="px-3 py-3">
+                    <button
+                      onClick={() => deleteSymbol(r.symbol)}
+                      className="rounded-lg border border-gray-300 px-3 py-1.5 text-gray-700 hover:bg-gray-100"
+                      title={`Remove ${r.symbol}`}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
+                <td
+                  colSpan={5}
+                  className="px-3 py-6 text-center text-gray-500"
+                >
                   No matches. Try a different search or add a ticker.
                 </td>
               </tr>
@@ -170,8 +184,8 @@ export default function DashboardClient({
       </div>
 
       <p className="text-xs text-gray-500">
-        Tip: your watchlist is synced to the URL parameter <code>?wl=</code> and saved to{" "}
-        <code>localStorage</code> on this device.
+        Tip: your watchlist is synced to the URL parameter <code>?wl=</code> and
+        saved to <code>localStorage</code> on this device.
       </p>
     </div>
   );
