@@ -1,16 +1,19 @@
-import { getDashboardData, getDashboardDataFor, type StockRow } from "@/lib/data";
+import { getDashboardData, getDashboardDataFor, type StockRow, type Data } from "@/lib/data";
 import DashboardClient from "@/components/DashboardClient";
 import SearchBar from "@/components/SearchBar";
 import WatchlistEditor from "@/components/WatchlistEditor";
 
 export default async function Page() {
-  // Default watchlist – you can later make this user-specific
+  // Default watchlist – you can later make this user-specific or read ?wl=
   const watchlist: string[] = ["AAPL", "MSFT", "GOOGL"];
 
-  // Fetch rows depending on watchlist
-  const rows: StockRow[] = watchlist.length
+  // Fetch dashboard Data (object with .stocks map)
+  const data: Data = watchlist.length
     ? await getDashboardDataFor(watchlist)
     : await getDashboardData();
+
+  // Convert map -> array of StockRow for the table and search
+  const rows: StockRow[] = Object.values(data.stocks);
 
   return (
     <main className="min-h-screen px-6 py-10 bg-gray-50">
@@ -28,7 +31,7 @@ export default async function Page() {
           <WatchlistEditor />
         </div>
 
-        {/* Dashboard table & charts */}
+        {/* Dashboard table */}
         <DashboardClient rows={rows} initialWatchlist={watchlist} />
       </div>
     </main>
