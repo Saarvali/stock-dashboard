@@ -10,116 +10,123 @@ import { getDailySeries } from "@/lib/alpha";
 // Types
 // ----------------------------
 
-export interface StockRow {
+export type StockRow = {
   symbol: string;
   name: string;
   price: number;
   change: number;
   changePct: number;
-  high52w: number;
-  low52w: number;
-  distFromHigh: number;
+  newsSent: number;   // [-1..+1]
+  redditSent: number; // [-1..+1]
+};
+
+export type StockDetail = {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePct: number;
   newsSent: number;
   redditSent: number;
-}
-
-export interface DashboardData {
-  watchlist: StockRow[];
-}
+  indicators: Record<string, number>;
+  history: Array<{ t: number; c: number }>;
+  overview: Record<string, string | number | null>;
+};
 
 // ----------------------------
-// Helpers
+// Internal helpers
 // ----------------------------
 
-// Fills in news + reddit sentiment
+/** Build a row from latest two daily bars (Alpha Vantage series). */
+function rowFromDaily(
+  symbol: string,
+  name: string,
+  series: Array<{ close: number }> | null | undefined
+): StockRow {
+  const last = Array.isArray(series) && series.length > 0 ? series[0] : undefined;
+  const prev = Array.isArray(series) && series.length > 1 ? series[1] : undefined;
+
+  const price = last?.close ?? 0;
+  const change = prev ? price - prev.close : 0;
+  const changePct = prev && prev.close !== 0 ? (change / prev.close) * 100 : 0;
+
+  return {
+    symbol,
+    name,
+    price,
+    change,
+    changePct,
+    newsSent: 0,
+    redditSent: 0,
+  };
+}
+
+/** Fill news/reddit sentiment (safe fallbacks to 0). */
 async function fillSentiments(symbol: string, row: StockRow): Promise<StockRow> {
   try {
     const [news, reddit] = await Promise.all([
       getNewsSentiment(symbol),
-      getRedditSentiment(symbol, row.name),
+      getRedditSentiment(symbol, row.name), // pass company name as hint for Reddit
     ]);
     row.newsSent = Number.isFinite(news) ? news : 0;
     row.redditSent = Number.isFinite(reddit) ? reddit : 0;
   } catch {
-    // keep neutral values
+    // keep neutrals on error
   }
   return row;
 }
 
-// Fills in pricing & indicators
-async function fillPricing(symbol: string, row: StockRow): Promise<StockRow> {
-  try {
-    const series = await finnhubDaily(symbol);
-
-    if (series && series.length > 0) {
-      const last = series[series.length - 1];
-      const prev = series.length > 1 ? series[series.length - 2] : null;
-
-      const price = last?.close ?? 0;
-      const change = prev ? price - prev.close : 0;
-      const changePct = prev && prev.close ? (change / prev.close) * 100 : 0;
-
-      row.price = price;
-      row.change = change;
-      row.changePct = changePct;
-      row.high52w = Math.max(...series.map((d) => d.high));
-      row.low52w = Math.min(...series.map((d) => d.low));
-      row.distFromHigh = distFromHighPct(price, row.high52w);
-    }
-  } catch {
-    // keep defaults
-  }
+/** Load one symbol (row) end-to-end. */
+async function loadRow(symbol: string, name: string): Promise<StockRow> {
+  const series = await getDailySeries(symbol).catch(() => null);
+  let row = rowFromDaily(symbol, name, series);
+  row = await fillSentiments(symbol, row);
   return row;
 }
 
 // ----------------------------
-// Main entry points
+// Public APIs (used by pages)
 // ----------------------------
 
-// Fill dashboard with data for a list of symbols
-export async function getDashboardData(symbols: { symbol: string; name: string }[]): Promise<DashboardData> {
-  const rows: StockRow[] = [];
-
-  for (const { symbol, name } of symbols) {
-    let row: StockRow = {
-      symbol,
-      name,
-      price: 0,
-      change: 0,
-      changePct: 0,
-      high52w: 0,
-      low52w: 0,
-      distFromHigh: 0,
-      newsSent: 0,
-      redditSent: 0,
-    };
-
-    row = await fillPricing(symbol, row);
-    row = await fillSentiments(symbol, row);
-
-    rows.push(row);
-  }
-
-  return { watchlist: rows };
+/** Default dashboard data (used when no wl param is present). */
+export async function getDashboardData(): Promise<StockRow[]> {
+  const symbols = ["AAPL", "TSLA", "MSFT", "VOLV-B.ST"];
+  const rows = await Promise.all(symbols.map((s) => loadRow(s, s)));
+  return rows;
 }
 
-// Get details for one stock (overview + pricing + sentiment)
-export async function getAnyStockDetail(symbol: string, name: string): Promise<StockRow> {
-  let row: StockRow = {
-    symbol,
-    name,
-    price: 0,
-    change: 0,
-    changePct: 0,
-    high52w: 0,
-    low52w: 0,
-    distFromHigh: 0,
-    newsSent: 0,
-    redditSent: 0,
+/** Dashboard data for a provided list of tickers (used with ?wl=...). */
+export async function getDashboardDataFor(symbols: string[]): Promise<StockRow[]> {
+  const cleaned = symbols
+    .map((s) => (s || "").trim())
+    .filter(Boolean)
+    .map((s) => s.toUpperCase());
+
+  const dedup = Array.from(new Set(cleaned));
+  const rows = await Promise.all(dedup.map((s) => loadRow(s, s)));
+  return rows;
+}
+
+/** Single-stock detail for /stock/[symbol]. */
+export async function getAnyStockDetail(symbol: string): Promise<StockDetail> {
+  const series = await getDailySeries(symbol).catch(() => null);
+  const base = rowFromDaily(symbol, symbol, series);
+  const withSent = await fillSentiments(symbol, base);
+
+  // Indicators (from your indicators.ts)
+  const indicators = {
+    distFromHighPct: await distFromHighPct(symbol).catch(() => 0),
   };
 
-  row = await fillPricing(symbol, row);
-  row = await fillSentiments(symbol, row);
+  // Price history (from your finnhub.ts)
+  const history = await finnhubDaily(symbol).catch(
+    () => [] as Array<{ t: number; c: number }>
+  );
 
-  return row;
+  return {
+    ...withSent,
+    indicators,
+    history,
+    overview: { source: "Alpha Vantage" }, // simple meta; extend if you add an overview API
+  };
 }
